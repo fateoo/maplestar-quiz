@@ -73,6 +73,9 @@ p, h1, h2 { margin: 0; }
 
 .workbench { display: grid; grid-template-columns: minmax(0, 1fr) minmax(18.5rem, .46fr); align-items: start; gap: 1.1rem; }
 .panel, .catalog-dialog, .compare-dialog { background: var(--panel); border-radius: 1.12rem; border: 1px solid var(--line); box-shadow: 0 5px 18px #243e2510; }
+.desktop-notice { max-width: 40rem; margin-inline: auto; padding: clamp(1.35rem, 5vw, 2.5rem); }
+.desktop-notice h1 { font-size: clamp(1.4rem, 5.5vw, 2rem); line-height: 1.35; }
+.desktop-notice p { margin-top: .65rem; color: var(--muted); line-height: 1.65; }
 .panel-header { min-height: 4rem; padding: .85rem 1.2rem; display: flex; align-items: center; justify-content: space-between; gap: .6rem; }
 .panel-header h2 { font-size: 1.05rem; font-weight: 725; white-space: nowrap; }
 .screenshot-actions, .upload-actions { display: flex; align-items: center; justify-content: center; gap: .55rem; }

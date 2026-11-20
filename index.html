@@ -6,14 +6,7 @@
   <meta name="theme-color" content="#f5f7f0">
   <title>腦力全開！快問快答｜涼圓 出品</title>
   <meta name="description" content="從角色圖片辨識單一 MapleStar 怪物或 NPC 的名稱。">
-  <link rel="stylesheet" href="web/app.css?v=0.0.5">
-  <script src="catalog/catalog-data.js?v=0.0.6" defer></script>
-  <script src="catalog/catalog-templates.js?v=0.0.6" defer></script>
-  <script src="recognition/read-templates.js" defer></script>
-  <script src="recognition/read-index.js" defer></script>
-  <script src="recognition/recognizer.js?v=0.0.8" defer></script>
-  <script src="recognition/locate-card.js?v=202611202240" defer></script>
-  <script src="web/app.js?v=0.0.5" defer></script>
+  <link rel="stylesheet" href="web/app.css?v=0.0.9">
 </head>
 <body>
   <header class="site-header">
@@ -24,7 +17,7 @@
           <p class="brand-detail"><span lang="en">MapleStar</span> · 涼圓 出品</p>
         </div>
       </div>
-      <div class="header-tools">
+      <div class="header-tools" data-desktop-only hidden>
         <div class="catalog" aria-live="polite">
           <span class="catalog-state" id="catalog-state" data-state="pending">正在載入圖鑑</span>
           <span class="catalog-details" id="catalog-details" hidden></span>
@@ -35,12 +28,17 @@
   </header>
 
   <main class="shell main-content">
-    <div class="page-intro">
+    <section class="panel desktop-notice" id="desktop-notice" aria-labelledby="desktop-notice-title" hidden>
+      <h1 id="desktop-notice-title">圖片辨識僅支援電腦</h1>
+      <p>請在桌上型電腦或筆記型電腦上開啟此頁。</p>
+    </section>
+
+    <div class="page-intro" data-desktop-only hidden>
       <h1>圖片辨識</h1>
       <p>請貼上單一怪物或 NPC 的截圖，保留完整輪廓，並盡量減少四周留白。</p>
     </div>
 
-    <div class="workbench">
+    <div class="workbench" data-desktop-only hidden>
       <section class="panel screenshot-panel" aria-labelledby="screenshot-title">
         <div class="panel-header">
           <h2 id="screenshot-title">待辨識圖片</h2>
@@ -115,11 +113,11 @@
     </div>
 
     <footer class="site-footer">
-      <span>圖片只在本機處理</span>
+      <span data-desktop-only hidden>圖片只在本機處理</span>
       <span id="catalog-version" hidden></span>
       <div class="release-details">
-        <span id="release-version">網頁版本 v0.0.8</span>
-        <span>發佈時間 <time id="release-time" datetime="2026-11-21T03:46:40+08:00">2026-11-21 03:46:40</time>（UTC+8）</span>
+        <span id="release-version">網頁版本 v0.0.9</span>
+        <span>發佈時間 <time id="release-time" datetime="2026-11-21T03:58:06+08:00">2026-11-21 03:58:06</time>（UTC+8）</span>
       </div>
     </footer>
   </main>
@@ -172,5 +170,36 @@
       </div>
     </div>
   </dialog>
+
+  <template id="desktop-scripts">
+    <script src="catalog/catalog-data.js?v=0.0.6"></script>
+    <script src="catalog/catalog-templates.js?v=0.0.6"></script>
+    <script src="recognition/read-templates.js"></script>
+    <script src="recognition/read-index.js"></script>
+    <script src="recognition/recognizer.js?v=0.0.9"></script>
+    <script src="recognition/locate-card.js?v=202611202240"></script>
+    <script src="web/app.js?v=0.0.9"></script>
+  </template>
+  <script>
+    (() => {
+      const { userAgent, userAgentData, platform, maxTouchPoints } = navigator;
+      const mobileAgent = /\b(?:Android|iPhone|iPad|iPod|Mobi(?:le)?|Tablet|IEMobile|Silk|Kindle|BlackBerry|BB10)\b/i.test(userAgent);
+      const androidPlatform = platform === 'Android' || userAgentData?.platform === 'Android';
+      const desktopIPad = /\bMacintosh\b/.test(userAgent) && maxTouchPoints > 1;
+      if (mobileAgent || userAgentData?.mobile || androidPlatform || desktopIPad) {
+        document.getElementById('desktop-notice').hidden = false;
+        return;
+      }
+
+      for (const element of document.querySelectorAll('[data-desktop-only]')) element.hidden = false;
+      const sources = document.getElementById('desktop-scripts').content.querySelectorAll('script[src]');
+      for (const source of sources) {
+        const script = document.createElement('script');
+        script.async = false;
+        script.src = source.getAttribute('src');
+        document.head.append(script);
+      }
+    })();
+  </script>
 </body>
 </html>

@@ -1522,7 +1522,7 @@ function mapleRecognitionWorker(onPrepared) {
     return matches;
   }
 
-  function recognizeCard(source, card, options, candidateLimit, silhouette, preferredFocus) {
+  function recognizeCard(source, card, options, candidateLimit, silhouette, preferredFocus, quietFocus) {
     source.lightValues ??= Uint8Array.from(source.pixels, luminance);
     const screen = { ...source, approximate: true };
     if (!silhouette && !cardHasDetails(screen, card)) return [];
@@ -1535,6 +1535,17 @@ function mapleRecognitionWorker(onPrepared) {
     }
     const ranked = rankCardTemplates(screen, card, options, silhouette);
     const initial = ranked.slice(0, 480);
+    let centered;
+    // A large centered outline inside quiet margins can be verified with the smaller search.
+    if (quietFocus && Math.min(card.width, card.height) >= 160 && clippedCardSides(card, quietFocus).length === 0
+      && quietFocus.width >= card.width * 0.65 && quietFocus.height >= card.height * 0.65) {
+      centered = refineCardWinner(screen, card, searchCardPlacements(screen, card, initial.slice(0, 240), candidateLimit, 'center'));
+      const winner = centered[0];
+      const rival = centered.find(match => answerName(match) !== answerName(winner));
+      if (winner && winner.score >= 0.885 && coversCardFocus(winner, quietFocus) && (!rival || winner.score - rival.score >= 0.04)) {
+        return centered;
+      }
+    }
     let first = refineCardWinner(screen, card, searchCardPlacements(screen, card, initial, candidateLimit));
     if (!silhouette && (first[0]?.score ?? 0) < 0.90) {
       const composite = recognizeTranslucentCard(screen, card, options, candidateLimit);
@@ -1547,7 +1558,7 @@ function mapleRecognitionWorker(onPrepared) {
       if ((core[0]?.score ?? 0) > (first[0]?.score ?? 0)) first = core;
     }
     if (!silhouette && (first[0]?.score ?? 0) < 0.80) {
-      const centered = refineCardWinner(screen, card, searchCardPlacements(screen, card, initial.slice(0, 240), candidateLimit, 'center'));
+      centered ??= refineCardWinner(screen, card, searchCardPlacements(screen, card, initial.slice(0, 240), candidateLimit, 'center'));
       if ((centered[0]?.score ?? 0) > (first[0]?.score ?? 0)) first = centered;
     }
     let foregroundRanks;
@@ -1606,9 +1617,19 @@ function mapleRecognitionWorker(onPrepared) {
     const coverage = subject ? subject.signature.reduce((sum, cell) => sum + cell, 0) / (SIGNATURE_SIDE ** 2 * 4) : 0;
 
     if (subject?.transparent && coverage >= 0.97) {
-      const clipped = recognizeClippedCard(screen, subject.box, options, limit, { early: true });
-      if (clipped.length) return completeSubject(screen, subject, options, clipped, limit);
+      screen.lightValues ??= Uint8Array.from(screen.pixels, luminance);
+      const focus = cardFocusBounds(screen, subject.box);
+      // A corner touch alone can be a complete pose. Try the normal search first in that case.
+      const prioritizeClipping = focus && clippedCardSides(subject.box, focus).length === 3;
+      if (prioritizeClipping) {
+        const clipped = recognizeClippedCard(screen, subject.box, options, limit, { focus, early: true });
+        if (clipped.length) return completeSubject(screen, subject, options, clipped, limit);
+      }
       const card = recognizeCard(screen, subject.box, options, limit);
+      if (!prioritizeClipping && focus && (!(card[0]?.score >= 0.91) || !coversCardFocus(card[0], focus))) {
+        const clipped = recognizeClippedCard(screen, subject.box, options, limit, { focus, early: true });
+        if (clipped.length) return completeSubject(screen, subject, options, clipped, limit);
+      }
       if (card.length) return completeSubject(screen, subject, options, card, limit);
     }
     const matteCard = inferredMatteCard(screen, subject, coverage);
@@ -1624,7 +1645,7 @@ function mapleRecognitionWorker(onPrepared) {
       const substantial = opaqueFocus.width * opaqueFocus.height >= 0.10 * opaqueCard.width * opaqueCard.height;
       if (!substantial && options.card === true) return [];
       if (substantial) {
-        const card = recognizeCard(screen, opaqueCard, options, limit, undefined, localized)
+        const card = recognizeCard(screen, opaqueCard, options, limit, undefined, localized, opaqueFocus)
           .filter(match => coversCardFocus(match, opaqueFocus));
         if ((card[0]?.score ?? 0) >= (bounded ? SCORE_FLOOR : 0.83)) {
           return completeSubject(screen, { box: opaqueCard }, options, card, limit);

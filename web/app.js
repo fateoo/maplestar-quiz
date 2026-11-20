@@ -11,6 +11,11 @@
   const catalogPageSize = 24;
   const candidateLimit = 5;
   const preferredCandidateScore = 0.8;
+  const spatialCandidateScore = 0.76;
+  const raceDelay = 100;
+  const spareBudget = 6000;
+  const trustedScore = 0.90;
+  const trustedMargin = 0.025;
   const formatNumber = new Intl.NumberFormat('zh-TW');
 
   const fileInput = get('file-input');
@@ -33,18 +38,21 @@
   const compareCopy = get('compare-copy');
 
   let worker;
+  let workerSourceUrl;
+  let workerInit;
   let workerState = 'pending';
   let workerIssue = '';
   let screenshotUrl;
   let currentFile;
   let requestId = 0;
-  let inFlightId;
+  let workerRequestId = 0;
+  let activeJob;
   let pendingRecognition = false;
-  let startedAt;
   let screenshotLoaded = false;
   let proposedRegions = [];
   // An undefined selection awaits a choice. Null means use the whole image.
   let selectedRegion = null;
+  let tentativeRegion = null;
   let draftRegion;
   let cropPointer;
   let catalogPage = 0;
@@ -121,55 +129,99 @@
       return;
     }
 
-    let sourceUrl;
     try {
       const source = [
         window.readMapleTemplates.toString(),
         window.readMapleIndex.toString(),
         `(${window.mapleRecognitionWorker.toString()})();`,
       ].join('\n');
-      sourceUrl = URL.createObjectURL(new Blob([source], { type: 'text/javascript' }));
-      worker = new Worker(sourceUrl);
-      worker.addEventListener('message', () => URL.revokeObjectURL(sourceUrl), { once: true });
-      worker.addEventListener('error', () => {
-        URL.revokeObjectURL(sourceUrl);
-        setEngineState('error', '無法啟動辨識引擎', '請用新版 Chrome、Edge 或 Safari 重新開啟網頁。');
-      });
-      worker.addEventListener('message', handleWorkerMessage);
-      worker.postMessage({ type: 'init', entries, packedIndex, packedTemplates });
+      workerSourceUrl = URL.createObjectURL(new Blob([source], { type: 'text/javascript' }));
+      workerInit = { type: 'init', entries, packedIndex, packedTemplates };
+      worker = createWorkerSlot();
       delete window.MAPLE_PREPARED_DATA;
       delete window.MAPLE_TEMPLATE_DATA;
     } catch {
-      if (sourceUrl) URL.revokeObjectURL(sourceUrl);
+      if (workerSourceUrl) URL.revokeObjectURL(workerSourceUrl);
       setEngineState('error', '無法啟動辨識引擎', '請用新版 Chrome、Edge 或 Safari 重新開啟網頁。');
     }
   }
 
-  function handleWorkerMessage({ data }) {
+  function createWorkerSlot() {
+    const instance = new Worker(workerSourceUrl);
+    const slot = { instance, ready: false, closed: false, lane: undefined };
+    instance.addEventListener('message', ({ data }) => handleWorkerMessage(slot, data));
+    instance.addEventListener('error', () => handleWorkerFault(slot));
+    instance.addEventListener('messageerror', () => handleWorkerFault(slot));
+    try {
+      instance.postMessage(workerInit);
+    } catch (error) {
+      retireWorker(slot);
+      throw error;
+    }
+    return slot;
+  }
+
+  function retireWorker(slot) {
+    if (!slot || slot.closed) return;
+    slot.closed = true;
+    slot.lane = undefined;
+    slot.instance.terminate();
+  }
+
+  function restartWarmWorker() {
+    setEngineState('pending', '正在載入圖鑑');
+    try {
+      worker = createWorkerSlot();
+    } catch {
+      setEngineState('error', '無法啟動辨識引擎', '請用新版 Chrome、Edge 或 Safari 重新開啟網頁。');
+    }
+  }
+
+  function handleWorkerMessage(slot, data) {
+    if (slot.closed) return;
     if (data.type === 'ready') {
-      setEngineState('ready', '本機圖鑑已就緒');
-      if (screenshotLoaded) recognize();
+      slot.ready = true;
+      if (slot === worker) {
+        setEngineState('ready', '本機圖鑑已就緒');
+        if (pendingRecognition) recognize();
+      } else if (activeJob?.alternate?.slot === slot) {
+        sendLane(activeJob.alternate);
+      }
       return;
     }
 
-    if (data.type === 'error' && workerState === 'pending') {
-      setEngineState('error', '辨識引擎載入失敗', '請確認圖鑑檔案完整，再用新版瀏覽器開啟網頁。');
+    if (data.type === 'error' && !slot.ready) {
+      handleWorkerFault(slot);
       return;
     }
+    if (data.type !== 'result' && data.type !== 'error') return;
+    const lane = slot.lane;
+    if (!lane || data.requestId !== lane.requestId) return;
+    slot.lane = undefined;
+    if (lane.job === activeJob) finishLane(lane, data);
+    else if (slot === worker && pendingRecognition) recognize();
+  }
 
-    if (data.requestId !== inFlightId) return;
-    inFlightId = undefined;
-    if (pendingRecognition && screenshotLoaded) {
-      pendingRecognition = false;
-      recognize();
-      return;
+  function handleWorkerFault(slot) {
+    if (slot.closed) return;
+    const lane = slot.lane ?? (activeJob?.alternate?.slot === slot ? activeJob.alternate : undefined);
+    retireWorker(slot);
+    if (lane && lane.job === activeJob) {
+      finishLane(lane, { type: 'error' });
+    } else if (slot === worker) {
+      if (slot.ready) restartWarmWorker();
+      else setEngineState('error', '辨識引擎載入失敗', '請確認圖鑑檔案完整，再用新版瀏覽器開啟網頁。');
     }
-    if (data.requestId !== requestId || !screenshotLoaded) return;
-    if (data.type === 'result') {
-      renderResults(data.matches, performance.now() - startedAt);
-    } else if (data.type === 'error') {
-      showNotice('error', '辨識失敗', '請重試，或換一張圖片。', true);
-    }
+  }
+
+  function invalidateRecognition() {
+    requestId += 1;
+    pendingRecognition = false;
+    if (!activeJob) return;
+    clearTimeout(activeJob.timer);
+    retireAlternate(activeJob.alternate);
+    activeJob = undefined;
+    if (worker?.closed) restartWarmWorker();
   }
 
   function showNotice(state, title, detail, canRetry = false) {
@@ -195,8 +247,7 @@
   }
 
   function clearScreenshot() {
-    requestId += 1;
-    pendingRecognition = false;
+    invalidateRecognition();
     screenshotLoaded = false;
     currentFile = undefined;
     if (screenshotUrl) URL.revokeObjectURL(screenshotUrl);
@@ -205,6 +256,7 @@
     preview.hidden = true;
     proposedRegions = [];
     selectedRegion = null;
+    tentativeRegion = null;
     draftRegion = undefined;
     cropPointer = undefined;
     cropChoices.replaceChildren();
@@ -262,7 +314,8 @@
       return button;
     }));
     get('crop-controls').hidden = false;
-    selectCrop(proposedRegions.length > 1 ? undefined : proposedRegions[0] ?? null);
+    const autoSelected = proposedRegions.length > 1 ? undefined : proposedRegions[0] ?? null;
+    selectCrop(autoSelected, autoSelected?.kind === 'sprite');
   }
 
   function wholeImage() {
@@ -387,10 +440,10 @@
     renderCropOverlay();
   }
 
-  function selectCrop(region) {
-    requestId += 1;
-    pendingRecognition = false;
+  function selectCrop(region, race = false) {
+    invalidateRecognition();
     selectedRegion = region;
+    tentativeRegion = race ? region : null;
     draftRegion = undefined;
     cropPointer = undefined;
     renderCropControls();
@@ -402,8 +455,7 @@
   }
 
   function startCropAdjustment() {
-    requestId += 1;
-    pendingRecognition = false;
+    invalidateRecognition();
     const image = wholeImage();
     const x = Math.floor(image.width * 0.1);
     const y = Math.floor(image.height * 0.1);
@@ -503,31 +555,179 @@
 
   function recognize() {
     if (!screenshotLoaded || selectedRegion === undefined || draftRegion) return;
+    if (activeJob) return;
     if (workerState === 'error') {
       showNotice('error', '無法辨識圖片', workerIssue);
       return;
     }
     if (workerState === 'pending') {
+      pendingRecognition = true;
       showNotice('busy', '正在載入圖鑑', '圖鑑就緒後會自動辨識這張圖片。');
       return;
     }
-    if (inFlightId !== undefined) {
+    if (worker.lane) {
       pendingRecognition = true;
       showNotice('busy', '等待辨識', '上一輪比對完成後會辨識這張圖片。');
       return;
     }
 
+    pendingRecognition = false;
     showNotice('busy', '正在辨識', '正在比對本機圖鑑中的怪物與 NPC。');
+    const job = { startedAt: performance.now(), tentative: tentativeRegion };
+    let primaryRegion = selectedRegion;
+    if (tentativeRegion) {
+      const image = wholeImage();
+      const heavilyPadded = tentativeRegion.width * tentativeRegion.height * 8 <= image.width * image.height;
+      primaryRegion = heavilyPadded ? tentativeRegion : null;
+    }
+    job.primary = { job, slot: worker, region: primaryRegion };
+    activeJob = job;
+    sendLane(job.primary);
+    if (job === activeJob && job.tentative && !job.primary.response) {
+      job.timer = setTimeout(() => startAlternate(job), raceDelay);
+    }
+  }
+
+  function sendLane(lane) {
+    if (lane.job !== activeJob || !lane.slot.ready || lane.slot.closed) return;
+    lane.started = true;
+    const region = lane.region ?? wholeImage();
+    let pixels;
     try {
-      const { rgba, width, height, scale } = imagePixels(selectedRegion ?? wholeImage(), 4200, 8_400_000);
-      startedAt = performance.now();
-      const jpeg = scale < 1 || ['image/jpeg', 'image/webp'].includes(currentFile.type) || /\.(jpe?g|webp)$/i.test(currentFile.name);
-      const options = { single: true, limit: candidateLimit, jpeg, suggestions: true };
-      if (selectedRegion?.kind === 'card') options.card = true;
-      worker.postMessage({ type: 'recognize', requestId: ++requestId, rgba, width, height, options }, [rgba.buffer]);
-      inFlightId = requestId;
+      pixels = imagePixels(region, 4200, 8_400_000);
     } catch {
+      finishLane(lane, { type: 'error', unreadableImage: true });
+      return;
+    }
+    const { rgba, width, height, scale } = pixels;
+    if (lane.job.tentative) {
+      const subject = lane.job.tentative;
+      const sx = width / region.width;
+      const sy = height / region.height;
+      lane.subject = { x: (subject.x - region.x) * sx, y: (subject.y - region.y) * sy, width: subject.width * sx, height: subject.height * sy };
+    }
+    const jpeg = scale < 1 || ['image/jpeg', 'image/webp'].includes(currentFile.type) || /\.(jpe?g|webp)$/i.test(currentFile.name);
+    const options = { single: true, limit: candidateLimit, jpeg, suggestions: true };
+    if (lane.region?.kind === 'card') options.card = true;
+    lane.requestId = ++workerRequestId;
+    lane.slot.lane = lane;
+    try {
+      lane.slot.instance.postMessage({ type: 'recognize', requestId: lane.requestId, rgba, width, height, options }, [rgba.buffer]);
+    } catch {
+      handleWorkerFault(lane.slot);
+    }
+  }
+
+  function startAlternate(job) {
+    if (job !== activeJob) return false;
+    const primary = job.primary.slot;
+    const warm = job.primary.response && primary.ready && !primary.closed && !primary.lane;
+    if (job.alternate && (job.alternate.started || !warm)) return false;
+    clearTimeout(job.timer);
+    retireAlternate(job.alternate);
+    const lane = { job, region: job.primary.region ? null : job.tentative };
+    job.alternate = lane;
+    if (warm) {
+      // Once the primary finishes, the fallback has no parallel work left to hedge.
+      lane.slot = primary;
+      sendLane(lane);
+    } else {
+      try {
+        lane.slot = createWorkerSlot();
+        lane.deadline = setTimeout(() => {
+          if (job === activeJob && job.alternate === lane && !lane.response) handleWorkerFault(lane.slot);
+        }, spareBudget);
+      } catch {
+        finishLane(lane, { type: 'error' });
+      }
+    }
+    return true;
+  }
+
+  function retireAlternate(lane) {
+    if (!lane) return;
+    clearTimeout(lane.deadline);
+    if (lane.slot !== worker) retireWorker(lane.slot);
+  }
+
+  function coversSubject(match, subject) {
+    if (!subject || !match || ![match.x, match.y, match.width, match.height].every(Number.isFinite)
+      || match.width <= 0 || match.height <= 0) return false;
+    const overlap = Math.max(0, Math.min(match.x + match.width, subject.x + subject.width) - Math.max(match.x, subject.x))
+      * Math.max(0, Math.min(match.y + match.height, subject.y + subject.height) - Math.max(match.y, subject.y));
+    return overlap >= 0.60 * subject.width * subject.height && overlap >= 0.45 * match.width * match.height;
+  }
+
+  function gradeLane(lane) {
+    const matches = lane.response.matches?.filter(({ score }) => Number.isFinite(score)) ?? [];
+    const top = matches[0];
+    const verified = matches.find(({ suggestion, score }) => !suggestion && score >= preferredCandidateScore);
+    const best = verified ?? top;
+    const comparable = matches.slice(1).find(match => !match.suggestion && coversSubject(match, lane.subject));
+    const supported = matches.filter(match => match.score >= spatialCandidateScore && coversSubject(match, lane.subject));
+    const trusted = top && !top.suggestion && top.score >= trustedScore && coversSubject(top, lane.subject)
+      && (!comparable || top.score - comparable.score >= trustedMargin);
+    return {
+      quality: verified ? 3 : best ? 2 : lane.response.type === 'result' ? 1 : 0,
+      geometry: coversSubject(best, lane.subject),
+      score: best?.score ?? -Infinity,
+      supported,
+      trusted,
+    };
+  }
+
+  function finishLane(lane, response) {
+    const { job } = lane;
+    if (job !== activeJob) return;
+    clearTimeout(lane.deadline);
+    lane.response = response;
+    if (!job.tentative) {
+      finishJob(job, lane);
+      return;
+    }
+    lane.grade = gradeLane(lane);
+    if (lane.grade.trusted) {
+      finishJob(job, lane);
+      return;
+    }
+    if (startAlternate(job) || !job.primary.response || !job.alternate.response) return;
+
+    const primary = job.primary.grade;
+    const alternate = job.alternate.grade;
+    const primarySupported = primary.supported.length > 0;
+    const alternateSupported = alternate.supported.length > 0;
+    if (primary.quality >= 2 && alternate.quality >= 2 && primarySupported !== alternateSupported) {
+      const winner = alternateSupported ? job.alternate : job.primary;
+      finishJob(job, winner, winner.grade.supported);
+    } else {
+      const comparison = alternate.quality - primary.quality || Number(alternate.geometry) - Number(primary.geometry) || alternate.score - primary.score;
+      finishJob(job, comparison > 0 ? job.alternate : job.primary);
+    }
+  }
+
+  function finishJob(job, winner, matches = winner.response.matches) {
+    clearTimeout(job.timer);
+    activeJob = undefined;
+    clearTimeout(job.alternate?.deadline);
+    const alternateSlot = job.alternate?.slot;
+    const spare = alternateSlot === worker ? undefined : alternateSlot;
+    if (spare?.ready && !spare.closed && (worker.closed || (winner.slot === spare && winner.grade?.trusted))) {
+      retireWorker(worker);
+      worker = spare;
+    } else {
+      retireWorker(spare);
+    }
+    if (worker.closed) restartWarmWorker();
+    if (job.tentative) {
+      selectedRegion = winner.region;
+      renderCropControls();
+    }
+    if (winner.response.type === 'result') {
+      renderResults(matches, performance.now() - job.startedAt);
+    } else if (winner.response.unreadableImage) {
       showNotice('error', '無法讀取圖片', '請換一張圖片，或縮小圖片尺寸後再試。', true);
+    } else {
+      showNotice('error', '辨識失敗', '請重試，或換一張圖片。', true);
     }
   }
 

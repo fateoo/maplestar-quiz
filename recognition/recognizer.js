@@ -1091,8 +1091,7 @@ function mapleRecognitionWorker(onPrepared) {
     return false;
   }
 
-  function cardFocusBounds(screen, card) {
-    const distance = Math.max(1, Math.round(Math.min(card.width, card.height) / 140));
+  function cardFocusBounds(screen, card, distance = Math.max(1, Math.round(Math.min(card.width, card.height) / 140))) {
     const columns = new Uint32Array(card.width);
     const rows = new Uint32Array(card.height);
     const vertical = distance * screen.width;
@@ -1126,6 +1125,76 @@ function mapleRecognitionWorker(onPrepared) {
     const height = quantile(rows, 0.996) - top + 1;
     if (Math.min(width, height) < 9) return null;
     return { x: card.x + left, y: card.y + top, width, height };
+  }
+
+  function offCenterCardFocus(screen, card) {
+    const shorterSide = Math.min(card.width, card.height);
+    const distance = Math.max(1, Math.round(shorterSide / 140));
+    const tileSize = Math.max(3, Math.round(shorterSide / 72));
+    const columns = Math.ceil(card.width / tileSize);
+    const rows = Math.ceil(card.height / tileSize);
+    const tiles = new Uint32Array(columns * rows);
+    const vertical = distance * screen.width;
+    const lights = screen.lightValues;
+    let total = 0;
+    for (let y = distance; y < card.height - distance; y += 1) {
+      const row = Math.floor(y / tileSize) * columns;
+      for (let x = distance; x < card.width - distance; x += 1) {
+        const pixel = (card.y + y) * screen.width + card.x + x;
+        const twiceLight = 2 * lights[pixel];
+        const horizontal = Math.abs(lights[pixel - distance] - twiceLight + lights[pixel + distance]);
+        const verticalEdge = Math.abs(lights[pixel - vertical] - twiceLight + lights[pixel + vertical]);
+        if (Math.max(horizontal, verticalEdge) <= 27) continue;
+        tiles[row + Math.floor(x / tileSize)] += 1;
+        total += 1;
+      }
+    }
+
+    // Join nearby stroke tiles without letting isolated pointers or specks set the subject bounds.
+    const seen = new Uint8Array(tiles.length);
+    const pending = new Uint32Array(tiles.length);
+    let primary;
+    for (let start = 0; start < tiles.length; start += 1) {
+      if (seen[start] || tiles[start] < 2) continue;
+      seen[start] = 1;
+      pending[0] = start;
+      let length = 1;
+      let count = 0;
+      let left = columns;
+      let top = rows;
+      let right = 0;
+      let bottom = 0;
+      for (let index = 0; index < length; index += 1) {
+        const tile = pending[index];
+        const x = tile % columns;
+        const y = Math.floor(tile / columns);
+        count += tiles[tile];
+        left = Math.min(left, x);
+        right = Math.max(right, x);
+        top = Math.min(top, y);
+        bottom = Math.max(bottom, y);
+        for (let row = Math.max(0, y - 3); row <= Math.min(rows - 1, y + 3); row += 1) {
+          for (let column = Math.max(0, x - 3); column <= Math.min(columns - 1, x + 3); column += 1) {
+            const next = row * columns + column;
+            if (seen[next] || tiles[next] < 2) continue;
+            seen[next] = 1;
+            pending[length++] = next;
+          }
+        }
+      }
+      if (!primary || count > primary.count) primary = { count, left, top, right, bottom };
+    }
+    if (!primary || primary.count < Math.max(24, total * 0.65)) return null;
+
+    const left = Math.max(0, (primary.left - 1) * tileSize);
+    const top = Math.max(0, (primary.top - 1) * tileSize);
+    const width = Math.min(card.width, (primary.right + 2) * tileSize) - left;
+    const height = Math.min(card.height, (primary.bottom + 2) * tileSize) - top;
+    const focus = cardFocusBounds(screen, { x: card.x + left, y: card.y + top, width, height }, distance);
+    if (!focus || focus.width * focus.height < card.width * card.height * 0.08) return null;
+    const centerX = (focus.x + focus.width / 2 - card.x) / card.width;
+    const centerY = (focus.y + focus.height / 2 - card.y) / card.height;
+    return centerX < 0.33 || centerX > 0.67 || centerY < 0.32 || centerY > 0.68 ? focus : null;
   }
 
   function opaqueCardBounds(screen, region, tight = false) {
@@ -1289,10 +1358,11 @@ function mapleRecognitionWorker(onPrepared) {
     return scales;
   }
 
-  function searchFocusedCard(screen, card, ranked, foregroundRanks, candidateLimit) {
-    const focus = cardFocusBounds(screen, card);
+  function searchFocusedCard(screen, card, ranked, foregroundRanks, candidateLimit, preferredFocus) {
+    const focus = preferredFocus ?? cardFocusBounds(screen, card);
     if (!focus) return [];
     const sizes = [[1, 1], [1.045, 1], [1, 1.045], [1.045, 1.045], [0.955, 1], [1, 0.955], [1.045, 0.955], [0.955, 1.045]];
+    if (preferredFocus) sizes.push([0.975, 1.03], [1.03, 0.975]);
     const clippedSide = clippedCardSide(card, focus);
     const profilesByTemplate = new Map();
     for (const { template } of ranked) {
@@ -1421,10 +1491,17 @@ function mapleRecognitionWorker(onPrepared) {
     return matches;
   }
 
-  function recognizeCard(source, card, options, candidateLimit, silhouette) {
+  function recognizeCard(source, card, options, candidateLimit, silhouette, preferredFocus) {
     source.lightValues ??= Uint8Array.from(source.pixels, luminance);
     const screen = { ...source, approximate: true };
     if (!silhouette && !cardHasDetails(screen, card)) return [];
+    const localized = !silhouette && (preferredFocus === undefined ? offCenterCardFocus(screen, card) : preferredFocus);
+    if (localized) {
+      const ranked = rankCardTemplates(screen, localized, options);
+      const foreground = rankCardForeground(screen, localized, ranked);
+      return searchFocusedCard(screen, card, ranked, foreground, candidateLimit, localized)
+        .filter(match => coversCardFocus(match, localized));
+    }
     const ranked = rankCardTemplates(screen, card, options, silhouette);
     const initial = ranked.slice(0, 480);
     let first = refineCardWinner(screen, card, searchCardPlacements(screen, card, initial, candidateLimit));
@@ -1487,12 +1564,14 @@ function mapleRecognitionWorker(onPrepared) {
     const opaqueCard = region && opaqueCardBounds(screen, region, bounded);
     if (opaqueCard) {
       if (!cardHasDetails(screen, opaqueCard)) return [];
-      opaqueFocus = cardFocusBounds(screen, opaqueCard);
+      const localized = offCenterCardFocus(screen, opaqueCard);
+      opaqueFocus = localized ?? cardFocusBounds(screen, opaqueCard);
       if (!opaqueFocus) return [];
       const substantial = opaqueFocus.width * opaqueFocus.height >= 0.10 * opaqueCard.width * opaqueCard.height;
       if (!substantial && options.card === true) return [];
       if (substantial) {
-        const card = recognizeCard(screen, opaqueCard, options, limit).filter(match => coversCardFocus(match, opaqueFocus));
+        const card = recognizeCard(screen, opaqueCard, options, limit, undefined, localized)
+          .filter(match => coversCardFocus(match, opaqueFocus));
         if ((card[0]?.score ?? 0) >= (bounded ? SCORE_FLOOR : 0.83)) {
           return completeSubject(screen, { box: opaqueCard }, options, card, limit);
         }

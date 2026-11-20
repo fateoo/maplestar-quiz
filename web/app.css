@@ -233,7 +233,7 @@ kbd { font: 600 .78rem system-ui, sans-serif; background: white; border: 1px sol
 .candidate-option:checked + .candidate-choice .candidate-marker::after { content: ""; width: .48rem; height: .48rem; border-radius: 50%; background: var(--green); }
 .candidate-meta { display: grid; justify-items: end; gap: .17rem; }
 
-.sprite { display: grid; place-items: center; width: 2.7rem; height: 2.7rem; overflow: hidden; border: 1px solid #dce7da; border-radius: .48rem; background: #f1f5ed; }
+.sprite { display: grid; grid-template: minmax(0, 1fr) / minmax(0, 1fr); place-items: center; width: 2.7rem; height: 2.7rem; overflow: hidden; border: 1px solid #dce7da; border-radius: .48rem; background: #f1f5ed; }
 .sprite img { max-width: 88%; max-height: 88%; object-fit: contain; image-rendering: pixelated; }
 .candidate-choice .sprite { width: var(--candidate-image-size); height: var(--candidate-image-size); }
 .candidate-choice .sprite img { width: 100%; height: 100%; max-width: 94%; max-height: 94%; }

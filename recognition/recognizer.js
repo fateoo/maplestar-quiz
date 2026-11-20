@@ -733,6 +733,7 @@ function mapleRecognitionWorker(onPrepared) {
   function completeSubject(source, subject, options, matches, limit) {
     if (!matches.length || matches.length >= limit) return matches;
     const primary = matches[0];
+    if (options.suggestions && primary.score < SCORE_FLOOR) return matches;
     const geometry = matchGeometry.get(primary);
     if (!geometry) return matches;
 
@@ -1347,16 +1348,20 @@ function mapleRecognitionWorker(onPrepared) {
         }
       }
     }
-    const refined = refineCardPlacements(screen, card, shortlist, candidateLimit, 'focus');
-    return rankSubject([...verified, ...refined], candidateLimit, 0.83, 0.83);
+    const step = Math.max(1, Math.round(Math.min(card.width, card.height) / 64));
+    const refined = refineCardPlacements(screen, card, shortlist, candidateLimit, 'focus', step);
+    const matches = rankSubject([...verified, ...refined], candidateLimit, 0.83, 0.83);
+    if (matches.length || step === 1 || shortlist.length === 0) return matches;
+
+    // Retry the same shortlist between the original search positions.
+    return refineCardPlacements(screen, card, shortlist, candidateLimit, 'focus', Math.floor(step / 2));
   }
 
-  function refineCardPlacements(screen, card, shortlist, candidateLimit, mode) {
+  function refineCardPlacements(screen, card, shortlist, candidateLimit, mode, step = Math.max(1, Math.round(Math.min(card.width, card.height) / 85))) {
     shortlist.sort((a, b) => b.score - a.score);
 
     const candidates = [];
     const scoreFloor = candidateLimit > 1 ? 0.70 : 0.76;
-    const step = Math.max(1, Math.round(Math.min(card.width, card.height) / (mode === 'focus' ? 64 : 85)));
     const refinements = [0.965, 0.985, 1, 1.015, 1.035].map(scale => [scale, scale]);
     if (mode === 'center') refinements.push([0.95, 1.05], [1.05, 0.95]);
     if (mode === 'focus') refinements.push([0.965, 1], [1, 0.965], [1.035, 1], [1, 1.035]);
@@ -1468,6 +1473,7 @@ function mapleRecognitionWorker(onPrepared) {
     if (subject?.empty) return [];
     const candidates = [];
     let opaqueFocus;
+    let suggestions = [];
     const coverage = subject ? subject.signature.reduce((sum, cell) => sum + cell, 0) / (SIGNATURE_SIDE ** 2 * 4) : 0;
 
     if (subject?.transparent && coverage >= 0.97) {
@@ -1490,6 +1496,7 @@ function mapleRecognitionWorker(onPrepared) {
         if ((card[0]?.score ?? 0) >= (bounded ? SCORE_FLOOR : 0.83)) {
           return completeSubject(screen, { box: opaqueCard }, options, card, limit);
         }
+        if (options.suggestions) suggestions = card.map(match => ({ ...match, suggestion: true }));
       }
     }
 
@@ -1508,7 +1515,11 @@ function mapleRecognitionWorker(onPrepared) {
         }
       }
       const matched = rankSubject(candidates, limit, 0.84, scoreFloor);
-      if (matched.length || subject.transparent) return completeSubject(screen, subject, options, matched, limit);
+      if (matched.length) return completeSubject(screen, subject, options, matched, limit);
+      if (options.suggestions) {
+        suggestions = rankSubject(candidates, limit, scoreFloor, scoreFloor).map(match => ({ ...match, suggestion: true }));
+      }
+      if (subject.transparent) return suggestions;
       const adjusted = recognizeCard(screen, subject.box, options, limit, subject.signature);
       if (adjusted.length) return completeSubject(screen, subject, options, adjusted, limit);
       candidates.length = 0;
@@ -1534,7 +1545,8 @@ function mapleRecognitionWorker(onPrepared) {
       }
     }
     if (spatialMatch) candidates.push(spatialMatch);
-    return completeSubject(screen, subject, options, rankSubject(candidates, limit, 0.87, SCORE_FLOOR, spatialMatch), limit);
+    const matched = rankSubject(candidates, limit, 0.87, SCORE_FLOOR, spatialMatch);
+    return matched.length ? completeSubject(screen, subject, options, matched, limit) : suggestions;
   }
 
   function recognizeMessage(message) {

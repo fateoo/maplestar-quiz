@@ -213,6 +213,7 @@ kbd { font: 600 .78rem system-ui, sans-serif; background: white; border: 1px sol
 }
 
 .candidate-list { display: grid; gap: .28rem; }
+.candidate-note { margin: 0 0 .4rem; padding: .4rem .6rem; border-radius: .45rem; color: #803719; background: var(--orange-soft); font-size: .87rem; }
 .candidate-row { position: relative; display: block; cursor: pointer; }
 .candidate-choice {
   --candidate-image-size: 4.25rem;

@@ -10,7 +10,7 @@
   const maxRefinementPixels = 1_500_000;
   const catalogPageSize = 24;
   const candidateLimit = 5;
-  const minimumCandidateScore = 0.8;
+  const preferredCandidateScore = 0.8;
   const formatNumber = new Intl.NumberFormat('zh-TW');
 
   const fileInput = get('file-input');
@@ -510,7 +510,7 @@
       const { rgba, width, height, scale } = imagePixels(selectedRegion ?? wholeImage(), 4200, 8_400_000);
       startedAt = performance.now();
       const jpeg = scale < 1 || ['image/jpeg', 'image/webp'].includes(currentFile.type) || /\.(jpe?g|webp)$/i.test(currentFile.name);
-      const options = { single: true, limit: candidateLimit, jpeg };
+      const options = { single: true, limit: candidateLimit, jpeg, suggestions: true };
       if (selectedRegion?.kind === 'card') options.card = true;
       worker.postMessage({ type: 'recognize', requestId: ++requestId, rgba, width, height, options }, [rgba.buffer]);
       inFlightId = requestId;
@@ -586,17 +586,17 @@
   }
 
   function renderResults(matches, elapsed) {
-    if (matches.length === 0) {
+    const candidates = matches.filter(({ score }) => Number.isFinite(score));
+    if (candidates.length === 0) {
       showNotice('empty', '找不到符合的項目', '請只截取一隻怪物或一名 NPC，保留完整輪廓後再試。');
       return;
     }
 
-    const visibleMatches = matches.filter(({ score }) => Number.isFinite(score) && score >= minimumCandidateScore);
-    if (visibleMatches.length === 0) {
-      showNotice('empty', '沒有候選達到 80% 相似度', '可以換一張圖片，或保留角色的完整輪廓後再試。');
-      return;
-    }
-
+    const preferred = candidates.filter(({ score, suggestion }) => !suggestion && score >= preferredCandidateScore);
+    const reviewing = preferred.length === 0;
+    const visibleMatches = reviewing ? candidates : preferred;
+    const note = get('candidate-note');
+    note.hidden = !reviewing;
     candidateList.replaceChildren(...visibleMatches.slice(0, candidateLimit).map(renderCandidate));
     selectCandidate(candidateList.querySelector('.entity-name'));
     const elapsedNode = get('elapsed');
@@ -605,7 +605,8 @@
     copyButton.hidden = false;
     elapsedNode.hidden = false;
     resultCard.hidden = false;
-    candidateFeedback.textContent = `找到 ${candidateList.childElementCount} 個候選名稱，已選取 ${selectedName.textContent}。`;
+    const reviewMessage = reviewing ? `${note.textContent} ` : '';
+    candidateFeedback.textContent = `${reviewMessage}找到 ${candidateList.childElementCount} 個候選名稱，已選取 ${selectedName.textContent}。`;
   }
 
   copyButton.addEventListener('click', async () => {

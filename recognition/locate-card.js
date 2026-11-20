@@ -34,14 +34,21 @@
       const green = bytes[offset + 1];
       const blue = bytes[offset + 2];
       if (!neutral(red, green, blue)) continue;
-      const matches = position => {
+      const matchesWithin = (position, tolerance) => {
         const index = position * 4;
         return bytes[index + 3] < ALPHA_LIMIT || (
-          Math.abs(bytes[index] - red) <= 12
-          && Math.abs(bytes[index + 1] - green) <= 12
-          && Math.abs(bytes[index + 2] - blue) <= 12
+          Math.abs(bytes[index] - red) <= tolerance
+          && Math.abs(bytes[index + 1] - green) <= tolerance
+          && Math.abs(bytes[index + 2] - blue) <= tolerance
         );
       };
+      // A uniform pale matte needs less tolerance so the card's highlights do not
+      // become connected to its outer padding.
+      if (Math.min(red, green, blue) >= 225) {
+        const strict = position => matchesWithin(position, 4);
+        if (edges.every(strict)) return strict;
+      }
+      const matches = position => matchesWithin(position, 12);
       const count = edges.filter(matches).length;
       if (count > bestCount) {
         best = matches;
@@ -50,6 +57,59 @@
       }
     }
     return best;
+  }
+
+  function brightMatteCard(bytes, width, height, refine) {
+    if (bytes[3] < 224 || Math.min(bytes[0], bytes[1], bytes[2]) < 250) return null;
+    const matte = position => {
+      const offset = position * 4;
+      return bytes[offset + 3] >= 224 && Math.abs(bytes[offset] - bytes[0]) <= 4
+        && Math.abs(bytes[offset + 1] - bytes[1]) <= 4 && Math.abs(bytes[offset + 2] - bytes[2]) <= 4;
+    };
+    for (let index = 0; index <= EDGE_SAMPLES; index += 1) {
+      const x = Math.floor(index * (width - 1) / EDGE_SAMPLES);
+      const y = Math.floor(index * (height - 1) / EDGE_SAMPLES);
+      if (![x, (height - 1) * width + x, y * width, (y + 1) * width - 1].every(matte)) return null;
+    }
+
+    let left = width;
+    let right = -1;
+    let top = height;
+    let bottom = -1;
+    let count = 0;
+    const columns = new Uint32Array(width);
+    const rows = new Uint32Array(height);
+    for (let y = 0; y < height; y += 1) {
+      for (let x = 0; x < width; x += 1) {
+        if (matte(y * width + x)) continue;
+        count += 1;
+        columns[x] += 1;
+        rows[y] += 1;
+        left = Math.min(left, x);
+        right = Math.max(right, x);
+        top = Math.min(top, y);
+        bottom = Math.max(bottom, y);
+      }
+    }
+
+    const w = right - left + 1;
+    const h = bottom - top + 1;
+    const area = w * h;
+    if (left < 2 || top < 2 || right >= width - 2 || bottom >= height - 2 || Math.min(w, h) < 16
+      || count < 0.70 * area || area >= width * height * (refine ? 0.98 : 0.78)) return null;
+    // A white gap through the envelope is evidence for separate inputs.
+    if (columns.subarray(left, right + 1).some(value => value === 0) || rows.subarray(top, bottom + 1).some(value => value === 0)) return null;
+    const sides = [0, 0, 0, 0];
+    for (let index = 0; index < 20; index += 1) {
+      const x = left + Math.floor((index + 0.5) * w / 20);
+      const y = top + Math.floor((index + 0.5) * h / 20);
+      sides[0] += Number(!matte(top * width + x) || !matte((top + 1) * width + x));
+      sides[1] += Number(!matte(bottom * width + x) || !matte((bottom - 1) * width + x));
+      sides[2] += Number(!matte(y * width + left) || !matte(y * width + left + 1));
+      sides[3] += Number(!matte(y * width + right) || !matte(y * width + right - 1));
+    }
+    return sides.filter(value => value >= 13).length >= 3 && hasDetail(bytes, width, { left, top, right, bottom })
+      ? { x: left, y: top, width: w, height: h, kind: 'card' } : null;
   }
 
   function markOutside(states, queue, width, height, isMatte) {
@@ -244,6 +304,9 @@
     else if (Object.prototype.toString.call(rgba) === '[object ArrayBuffer]') bytes = new Uint8Array(rgba);
     else return [];
     if (bytes.length !== pixels * 4) return [];
+
+    const brightCard = brightMatteCard(bytes, width, height, refine);
+    if (brightCard) return [brightCard];
 
     const isMatte = matteTest(bytes, width, height);
     if (!isMatte) return [];

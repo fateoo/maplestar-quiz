@@ -1208,7 +1208,7 @@ function mapleRecognitionWorker(onPrepared) {
     return primary;
   }
 
-  function cardInkBounds(screen, card, region, focus) {
+  function cardInkBounds(screen, card, region, focus, allowEdges = false) {
     let left = region.x + region.width;
     let top = region.y + region.height;
     let right = region.x - 1;
@@ -1225,17 +1225,17 @@ function mapleRecognitionWorker(onPrepared) {
       }
     }
     const pixels = card.width * card.height;
-    if (darkPixels < pixels * 0.01 || darkPixels > pixels * 0.33) return null;
+    if (darkPixels < pixels * 0.01 || darkPixels > pixels * (allowEdges ? 0.58 : 0.33)) return null;
     const width = right - left + 1;
     const height = bottom - top + 1;
     const area = width * height;
-    if (area < pixels * 0.06 || area >= 0.90 * focus.width * focus.height) return null;
-    if (left < card.x + 2 || top < card.y + 2 || right >= card.x + card.width - 2
-      || bottom >= card.y + card.height - 2) return null;
+    if (area < pixels * 0.06 || area >= (allowEdges ? 0.97 : 0.90) * focus.width * focus.height) return null;
+    if (!allowEdges && (left < card.x + 2 || top < card.y + 2 || right >= card.x + card.width - 2
+      || bottom >= card.y + card.height - 2)) return null;
     return { x: left, y: top, width, height };
   }
 
-  function dominantDarkCardFocus(screen, card) {
+  function dominantDarkCardFocus(screen, card, allowEdges = false) {
     const tileSize = Math.max(3, Math.round(Math.min(card.width, card.height) / 72));
     const columns = Math.ceil(card.width / tileSize);
     const rows = Math.ceil(card.height / tileSize);
@@ -1250,7 +1250,7 @@ function mapleRecognitionWorker(onPrepared) {
       }
     }
     const area = card.width * card.height;
-    if (darkPixels < 0.01 * area || darkPixels > 0.30 * area) return null;
+    if (darkPixels < 0.01 * area || darkPixels > (allowEdges ? 0.58 : 0.30) * area) return null;
     const primary = largestCardComponent(tiles, columns, rows, 1);
     if (!primary || primary.count < 0.65 * darkPixels) return null;
 
@@ -1259,8 +1259,8 @@ function mapleRecognitionWorker(onPrepared) {
     const width = Math.min(card.width, (primary.right + 1) * tileSize) - left;
     const height = Math.min(card.height, (primary.bottom + 1) * tileSize) - top;
     const connected = { x: card.x + left, y: card.y + top, width, height };
-    const focus = cardInkBounds(screen, card, connected, card);
-    return focus && focus.width * focus.height <= 0.5 * area ? focus : null;
+    const focus = cardInkBounds(screen, card, connected, card, allowEdges);
+    return focus && focus.width * focus.height <= (allowEdges ? 0.95 : 0.5) * area ? focus : null;
   }
 
   function hasOpaqueCardCorners(screen, region) {
@@ -1273,8 +1273,70 @@ function mapleRecognitionWorker(onPrepared) {
     return corners.every(index => (pixels[index] >>> 24) >= 224);
   }
 
+  function hasOpaqueCardInterior(screen, region) {
+    if (hasOpaqueCardCorners(screen, region)) return true;
+    const { x, y, width, height } = region;
+    return hasOpaqueCardCorners(screen, { x: x + 1, y: y + 1, width: width - 2, height: height - 2 });
+  }
+
+  function opaqueAlphaPanel(screen, box) {
+    let left = box.x + box.width;
+    let top = box.y + box.height;
+    let right = box.x - 1;
+    let bottom = box.y - 1;
+    let count = 0;
+    const { pixels, width: stride } = screen;
+    for (let y = box.y; y < box.y + box.height; y += 1) {
+      for (let x = box.x; x < box.x + box.width; x += 1) {
+        if ((pixels[y * stride + x] >>> 24) < 224) continue;
+        count += 1;
+        left = Math.min(left, x);
+        top = Math.min(top, y);
+        right = Math.max(right, x);
+        bottom = Math.max(bottom, y);
+      }
+    }
+    const width = right - left + 1;
+    const height = bottom - top + 1;
+    if (Math.min(width, height) < 32 || count < 0.97 * width * height) return null;
+    const panel = { x: left, y: top, width, height };
+    return hasOpaqueCardInterior(screen, panel) ? panel : null;
+  }
+
+  function hasCoolCardBorder(screen, region) {
+    if (Math.min(region.width, region.height) < 40 || !hasOpaqueCardInterior(screen, region)) return false;
+    const { pixels, width: stride } = screen;
+    let cool = 0;
+    let background = 0;
+    const samples = 24;
+    const count = 4 * samples;
+    const examine = (x, y) => {
+      const pixel = pixels[y * stride + x];
+      if ((pixel >>> 24) < 224) return;
+      const red = pixel & 255;
+      const green = (pixel >>> 8) & 255;
+      const blue = (pixel >>> 16) & 255;
+      if (blue >= red + 14 && blue >= green + 4 && 3 * red + 5 * green + 2 * blue >= 900) {
+        cool += 1;
+        background += 1;
+      } else if (Math.min(red, green, blue) >= 195) {
+        background += 1;
+      }
+    };
+    for (let index = 0; index < samples; index += 1) {
+      const fraction = 0.08 + 0.84 * ((index + 0.5) / samples);
+      const x = region.x + Math.floor(fraction * region.width);
+      const y = region.y + Math.floor(fraction * region.height);
+      examine(x, region.y + 2);
+      examine(x, region.y + region.height - 3);
+      examine(region.x + 2, y);
+      examine(region.x + region.width - 3, y);
+    }
+    return cool >= 0.58 * count && background >= 0.88 * count;
+  }
+
   function opaqueCardBounds(screen, region, tight = false) {
-    if (!hasOpaqueCardCorners(screen, region)) return null;
+    if (!(tight ? hasOpaqueCardInterior(screen, region) : hasOpaqueCardCorners(screen, region))) return null;
     const { pixels, width: stride } = screen;
     const { x, y, width, height } = region;
 
@@ -1351,12 +1413,16 @@ function mapleRecognitionWorker(onPrepared) {
     return { ...template, samples, contrast };
   }
 
-  function recognizeTranslucentCard(screen, card, options, candidateLimit) {
+  function recognizeTranslucentCard(screen, card, options, candidateLimit, focus) {
     if (!translucentTemplates.length) return [];
     const backdrop = cardBackdrop(screen, card);
     const composites = translucentTemplates.map(template => compositeTemplate(template, backdrop));
     const ranked = rankCardTemplates(screen, card, options, null, composites).slice(0, 100);
-    return refineCardWinner(screen, card, searchCardPlacements(screen, card, ranked, candidateLimit, 'center'));
+    const centered = refineCardWinner(screen, card, searchCardPlacements(screen, card, ranked, candidateLimit, 'center'));
+    if (!focus || (centered[0]?.score ?? 0) >= 0.91) return centered;
+    const local = rankCardTemplates(screen, focus, options, null, composites);
+    const localized = searchFocusedCard(screen, card, local, rankCardForeground(screen, focus, local), candidateLimit, focus, false, true);
+    return (localized[0]?.score ?? 0) > (centered[0]?.score ?? 0) ? localized : centered;
   }
 
   function searchCardPlacements(screen, card, ranked, candidateLimit, mode = 'wide') {
@@ -1418,12 +1484,12 @@ function mapleRecognitionWorker(onPrepared) {
     }
   }
 
-  function focusedScales(bounds, focus, sizes, clippedSides) {
+  function focusedScales(bounds, focus, sizes, clippedSides, gentleClipping = false) {
     const widthScale = focus.width / bounds.width;
     const heightScale = focus.height / bounds.height;
     const scales = [];
     const multiEdge = clippedSides.length > 1;
-    const minimumExtension = multiEdge ? 1.12 : 1.05;
+    const minimumExtension = multiEdge && !gentleClipping ? 1.12 : 1.05;
     for (const [adjustX, adjustY] of sizes) {
       const scaleX = widthScale * adjustX;
       const scaleY = heightScale * adjustY;
@@ -1449,12 +1515,17 @@ function mapleRecognitionWorker(onPrepared) {
     return scales;
   }
 
-  function searchFocusedCard(screen, card, ranked, foregroundRanks, candidateLimit, preferredFocus, clippedOnly = false, fineRecovery = false) {
+  function searchFocusedCard(screen, card, ranked, foregroundRanks, candidateLimit, preferredFocus, clippedOnly = false, fineRecovery = false, edgeHints) {
     const focus = preferredFocus ?? cardFocusBounds(screen, card);
     if (!focus) return [];
     const sizes = [[1, 1], [1.045, 1], [1, 1.045], [1.045, 1.045], [0.955, 1], [1, 0.955], [1.045, 0.955], [0.955, 1.045]];
     if (preferredFocus) sizes.push([0.975, 1.03], [1.03, 0.975]);
-    const nearbySides = clippedCardSides(card, focus);
+    const tighterOffCenter = fineRecovery && !clippedOnly && preferredFocus?.offCenter;
+    const tightlyBounded = fineRecovery && !clippedOnly && !tighterOffCenter;
+    if (tightlyBounded) sizes.push([1.02, 1.035], [1.02, 0.975], [0.985, 1.025], [0.975, 0.985]);
+    if (tighterOffCenter) sizes.push([0.97, 1.03], [0.97, 1.06], [1.03, 0.97], [1.06, 0.97]);
+    if (clippedOnly && fineRecovery) sizes.push([1.06, 0.975], [0.975, 1.06], [1.035, 1.02], [1.02, 1.035]);
+    const nearbySides = edgeHints ?? clippedCardSides(card, focus);
     const clippedSides = clippedOnly || nearbySides.length === 1 ? nearbySides : [];
     if (clippedOnly && clippedSides.length > 1) sizes.push([1.06, 1], [1, 1.06]);
     const profilesByTemplate = new Map();
@@ -1463,14 +1534,19 @@ function mapleRecognitionWorker(onPrepared) {
       const profiles = template.probeBounds ? [fullBounds, template.probeBounds] : [fullBounds];
       const compatible = profiles.map(bounds => ({
         bounds,
-        scales: focusedScales(bounds, focus, sizes, clippedSides).filter(scale => !clippedOnly || scale.clippedSide),
+        scales: focusedScales(bounds, focus, sizes, clippedSides, clippedOnly && fineRecovery).filter(scale => !clippedOnly || scale.clippedSide),
       }))
         .filter(profile => profile.scales.length);
       if (compatible.length) profilesByTemplate.set(template, compatible);
     }
     const beforeBudget = ({ template }) => profilesByTemplate.has(template);
-    const focusedPool = foregroundRanks.filter(beforeBudget).slice(0, clippedOnly ? 240 : 480);
-    const widerPool = ranked.filter(beforeBudget).slice(0, clippedOnly ? 480 : 1400);
+    const limited = tighterOffCenter || tightlyBounded;
+    // A heavily cropped sprite can lose distinctive colors at several edges.
+    const widerClip = clippedOnly && fineRecovery && clippedSides.length >= 3;
+    const focusedLimit = limited ? 120 : widerClip ? 520 : clippedOnly ? 240 : 480;
+    const paletteLimit = limited ? 180 : widerClip ? 1250 : clippedOnly ? 480 : 1400;
+    const focusedPool = foregroundRanks.filter(beforeBudget).slice(0, focusedLimit);
+    const widerPool = ranked.filter(beforeBudget).slice(0, paletteLimit);
     const pool = new Set([...focusedPool, ...widerPool].map(({ template }) => template));
 
     // A nearly full card can contain decorations outside the main subject's edge box.
@@ -1482,6 +1558,15 @@ function mapleRecognitionWorker(onPrepared) {
     if (focus.height >= card.height * 0.82) {
       const shift = Math.round(focus.height * 0.04);
       shifts.push([0, -shift], [0, shift]);
+    }
+    if (limited) {
+      const shortX = Math.max(1, Math.round(focus.width * 0.02));
+      const shortY = Math.max(1, Math.round(focus.height * 0.02));
+      for (const x of [-shortX, 0, shortX]) {
+        for (const y of [-shortY, 0, shortY]) {
+          if (x || y) shifts.push([x, y]);
+        }
+      }
     }
     const shortlist = [];
     const verified = [];
@@ -1509,7 +1594,7 @@ function mapleRecognitionWorker(onPrepared) {
               shortlist.push({ template, box, mirrored, score });
               // A pose can be convincing on the full sample set even if it ranks lower on the coarse probes.
               const checked = cardPlacementScore(screen, template, box, card, mirrored, template.samples, false, true);
-              if (checked >= 0.83) verified.push(matchFromTemplate(template, box, checked, 'normalized', mirrored));
+              if (checked >= (tightlyBounded ? 0.78 : 0.83)) verified.push(matchFromTemplate(template, box, checked, 'normalized', mirrored));
             }
           }
         }
@@ -1517,12 +1602,17 @@ function mapleRecognitionWorker(onPrepared) {
     }
     const step = Math.max(1, Math.round(Math.min(card.width, card.height) / 64));
     const refined = refineCardPlacements(screen, card, shortlist, candidateLimit, 'focus', step);
-    const matches = rankSubject([...verified, ...refined], candidateLimit, 0.83, 0.83);
-    if (matches.length || shortlist.length === 0) return matches;
+    const matches = rankSubject([...verified, ...refined], candidateLimit, tightlyBounded ? 0.78 : 0.83, tightlyBounded ? 0.78 : 0.83);
+    if (matches.length) return matches;
 
     // Retry the same shortlist between the original search positions.
-    const narrower = step > 1 ? refineCardPlacements(screen, card, shortlist, candidateLimit, 'focus', Math.floor(step / 2)) : [];
-    if (narrower.length || !fineRecovery) return narrower;
+    const narrower = step > 1 && shortlist.length ? refineCardPlacements(screen, card, shortlist, candidateLimit, 'focus', Math.floor(step / 2)) : [];
+    if (narrower.length) return narrower;
+    if (!fineRecovery) {
+      return preferredFocus?.offCenter && !clippedOnly
+        ? searchFocusedCard(screen, card, ranked, foregroundRanks, candidateLimit, preferredFocus, false, true)
+        : [];
+    }
     return refineCardPlacements(screen, card, shortlist, candidateLimit, 'focus', 1, true);
   }
 
@@ -1538,9 +1628,11 @@ function mapleRecognitionWorker(onPrepared) {
     const allowContrastShift = mode === 'center' || mode === 'focus';
     for (const { template, box, mirrored } of shortlist.slice(0, mode === 'focus' ? 48 : 210)) {
       let best;
-      for (const [adjustX, adjustY] of refinements) {
-        const width = Math.round(box.width * adjustX);
-        const height = Math.round(box.height * adjustY);
+      const dimensions = refinements.map(([x, y]) => [Math.round(box.width * x), Math.round(box.height * y)]);
+      // A rounded resize may miss by one pixel even when the overall fit is correct.
+      if (fineRecovery) dimensions.push([box.width - 1, box.height], [box.width + 1, box.height],
+        [box.width, box.height - 1], [box.width, box.height + 1]);
+      for (const [width, height] of dimensions) {
         for (let dx = -2; dx <= 2; dx += 1) {
           for (let dy = -2; dy <= 2; dy += 1) {
             const x = box.x + step * dx + Math.round((box.width - width) / 2);
@@ -1553,7 +1645,8 @@ function mapleRecognitionWorker(onPrepared) {
       }
       if (best) candidates.push(best);
     }
-    return rankSubject(candidates, candidateLimit, mode === 'focus' ? 0.83 : 0.76, scoreFloor);
+    const minimum = mode === 'focus' ? (fineRecovery ? 0.78 : 0.83) : 0.76;
+    return rankSubject(candidates, candidateLimit, minimum, scoreFloor);
   }
 
   function refineCardWinner(screen, card, matches) {
@@ -1614,17 +1707,31 @@ function mapleRecognitionWorker(onPrepared) {
 
   function recoverCardMatch(source, card, options, limit, previous, subjectFocus) {
     const previousScore = previous[0]?.score ?? 0;
-    if (!card || previousScore >= 0.88 || !hasOpaqueCardCorners(source, card)) return [];
+    if (!card) return [];
+    const preceding = previous[0];
+    const template = preceding && matchGeometry.get(preceding)?.template;
+    const littleInk = template && template.samples.filter(point => point.light <= 90).length < 0.08 * template.samples.length;
+    const smallPatch = preceding && preceding.width * preceding.height < 0.18 * card.width * card.height;
+    const suspect = Boolean(littleInk || smallPatch);
+    if ((previousScore >= 0.88 && !suspect) || !hasOpaqueCardInterior(source, card)) return [];
     source.lightValues ??= Uint8Array.from(source.pixels, luminance);
     const screen = { ...source, approximate: true };
-    if (!cardHasDetails(screen, card)) return [];
 
     // A disconnected cursor or panel edge should not enlarge the main sprite.
-    const darkFocus = dominantDarkCardFocus(screen, card);
-    if (darkFocus) {
-      const matches = searchCardSubject(screen, card, options, limit, darkFocus, true);
+    const tightCard = options.card === true || hasCoolCardBorder(screen, card);
+    const darkFocus = dominantDarkCardFocus(screen, card, tightCard || suspect);
+    if (!darkFocus && !cardHasDetails(screen, card)) return [];
+    const measured = tightCard && Math.min(card.width, card.height) <= 180 ? cardFocusBounds(screen, card) : null;
+    const extra = measured && (!darkFocus || measured.width * measured.height > darkFocus.width * darkFocus.height * 1.10) ? measured : null;
+    for (const candidate of [darkFocus, extra]) {
+      if (!candidate) continue;
+      const matches = searchCardSubject(screen, card, options, limit, candidate, true);
       const [best, rival] = matches;
-      if (best?.score >= Math.max(0.83, previousScore + 0.025) && coversCardFocus(best, darkFocus, 0.70, 0.65)
+      const priorCoversSubject = previous[0] && coversCardFocus(previous[0], candidate, 0.70, 0.65);
+      const ungrounded = !priorCoversSubject || littleInk;
+      const minimum = previousScore >= 0.88 && ungrounded ? 0.90
+        : tightCard && !priorCoversSubject ? 0.78 : Math.max(0.83, previousScore + 0.025);
+      if (best?.score >= minimum && coversCardFocus(best, candidate, 0.70, 0.65)
         && (!rival || best.score - rival.score >= 0.035)) {
         return best.score >= 0.92 ? matches : matches.map(match => ({ ...match, suggestion: true }));
       }
@@ -1634,15 +1741,22 @@ function mapleRecognitionWorker(onPrepared) {
     if (darkFocus || !focus || focus.width * focus.height > card.width * card.height * 0.5) return [];
     // Faded sprites have too little dark ink. Fit their composite art against the
     // background immediately around the connected strokes instead of the card edges.
-    const pad = Math.max(6, Math.round(Math.min(focus.width, focus.height) * 0.20));
+    for (const fraction of [0.20, 0.12]) {
+      const region = expandCardFocus(card, focus, fraction);
+      const matches = recognizeTranslucentCard(screen, region, options, limit, focus);
+      const best = matches[0];
+      if (best?.score >= Math.max(0.91, previousScore + 0.025) && coversCardFocus(best, focus, 0.65, 0.65)) return matches;
+    }
+    return [];
+  }
+
+  function expandCardFocus(card, focus, fraction) {
+    const pad = Math.max(6, Math.round(Math.min(focus.width, focus.height) * fraction));
     const x = Math.max(card.x, focus.x - pad);
     const y = Math.max(card.y, focus.y - pad);
     const right = Math.min(card.x + card.width, focus.x + focus.width + pad);
     const bottom = Math.min(card.y + card.height, focus.y + focus.height + pad);
-    const region = { x, y, width: right - x, height: bottom - y };
-    const matches = recognizeTranslucentCard(screen, region, options, limit);
-    const best = matches[0];
-    return best?.score >= Math.max(0.91, previousScore + 0.025) && coversCardFocus(best, focus, 0.65, 0.65) ? matches : [];
+    return { x, y, width: right - x, height: bottom - y };
   }
 
   function recognizeCard(source, card, options, candidateLimit, silhouette, preferredFocus, quietFocus) {
@@ -1705,8 +1819,12 @@ function mapleRecognitionWorker(onPrepared) {
     return refineCardWinner(screen, card, searchCardPlacements(screen, card, remaining.slice(0, 920), candidateLimit));
   }
 
-  function recognizeClippedCard(source, card, options, limit, { focus: existingFocus, early = false } = {}) {
-    if (!hasOpaqueCardCorners(source, card)) return [];
+  function recognizeClippedCard(source, card, options, limit, { focus: existingFocus, early = false, transparentCard = false } = {}) {
+    if (!hasOpaqueCardCorners(source, card)) {
+      // Bilinear resizing can soften the first pixel of an otherwise opaque card border.
+      const inset = { x: card.x + 1, y: card.y + 1, width: card.width - 2, height: card.height - 2 };
+      if (!transparentCard || !hasOpaqueCardCorners(source, inset)) return [];
+    }
     source.lightValues ??= Uint8Array.from(source.pixels, luminance);
     const screen = { ...source, approximate: true };
     if (!cardHasDetails(screen, card)) return [];
@@ -1714,16 +1832,118 @@ function mapleRecognitionWorker(onPrepared) {
     if (!focus) return [];
     const sides = clippedCardSides(card, focus);
     // A noisy field that reaches all four edges provides no clear axis to recover.
-    if (sides.length < 2 || sides.length === 4) return [];
+    if (sides.length < (transparentCard && !early ? 1 : 2) || sides.length === 4) return [];
     if (early && (focus.width < card.width * 0.70 || focus.height < card.height * 0.70
       || !sides.some(side => side === 'left' || side === 'right')
       || !sides.some(side => side === 'top' || side === 'bottom'))) return [];
+    const recovery = transparentCard && !early;
+    if (recovery && sides.length === 2) {
+      const tolerance = Math.max(2, Math.round(Math.min(card.width, card.height) * 0.022)) + 1;
+      const near = [
+        ['left', focus.x - card.x], ['top', focus.y - card.y],
+        ['right', card.x + card.width - focus.x - focus.width],
+        ['bottom', card.y + card.height - focus.y - focus.height],
+      ].filter(([side, gap]) => !sides.includes(side) && gap <= tolerance);
+      if (near.length === 1) sides.push(near[0][0]);
+    }
     const ranked = rankCardTemplates(screen, card, options);
     const foreground = rankCardForeground(screen, card, ranked);
-    const matches = searchFocusedCard(screen, card, ranked, foreground, limit, focus, true);
-    const minimum = early ? 0.91 : 0.88;
+    const matches = searchFocusedCard(screen, card, ranked, foreground, limit, focus, true, recovery, sides);
+    const minimum = early ? 0.91 : recovery ? 0.83 : 0.88;
     return matches.filter(match => match.score >= minimum && coversCardFocus(match, focus)
       && sides.some(side => extendsPastCardSide(match, card, side)));
+  }
+
+  function recognizeCardPanel(screen, panel, options, limit, transparentCard = false) {
+    screen.lightValues ??= Uint8Array.from(screen.pixels, luminance);
+    const focus = cardFocusBounds(screen, panel);
+    // A corner touch alone can be a complete pose. Try the normal search first in that case.
+    const prioritizeClipping = focus && clippedCardSides(panel, focus).length === 3;
+    if (prioritizeClipping) {
+      const clipped = recognizeClippedCard(screen, panel, options, limit, { focus, early: true, transparentCard });
+      if (clipped.length) return clipped;
+    }
+    const card = recognizeCard(screen, panel, options, limit);
+    if (!prioritizeClipping && focus && (!(card[0]?.score >= 0.91) || !coversCardFocus(card[0], focus))) {
+      const clipped = recognizeClippedCard(screen, panel, options, limit, { focus, early: true });
+      if (clipped.length) return clipped;
+    }
+    if ((card[0]?.score ?? 0) < SCORE_FLOOR) {
+      const recovered = recognizeClippedCard(screen, panel, options, limit, { focus, transparentCard });
+      if (recovered.length) return recovered;
+    }
+    return card;
+  }
+
+  function retryCardSampling(screen, card, options) {
+    if (options.retrySampling === false || Math.max(card.width, card.height) > 450
+      || !hasOpaqueCardInterior(screen, card)) return [];
+    screen.lightValues ??= Uint8Array.from(screen.pixels, luminance);
+    const ink = dominantDarkCardFocus(screen, card, true);
+    const measured = cardSubjectFocus(screen, card) ?? cardFocusBounds(screen, card);
+    const focus = ink && (!measured || measured.width * measured.height <= 1.55 * ink.width * ink.height) ? ink : measured;
+    if (!focus || focus.width * focus.height < 0.08 * card.width * card.height) return [];
+
+    // On a blurred or very small capture, the ordinary sampling grid can miss a
+    // thin outline. Try the same pixels at a few bounded, nearest-neighbor grids.
+    const narrower = expandCardFocus(card, focus, 0.14);
+    const trials = [
+      { region: card, scale: 1.25 }, { region: card, scale: 1.25, alternateGrid: true },
+      { region: card, scale: 1.5 }, { region: card, scale: 0.8 },
+    ];
+    if (narrower.width * narrower.height <= 0.85 * card.width * card.height) trials.push({ region: narrower, scale: 1 });
+    for (const { region, scale, alternateGrid } of trials) {
+      const width = Math.round(region.width * scale);
+      const height = Math.round(region.height * scale);
+      const grid = (size, count) => {
+        const stride = size / count;
+        let position = 0.5 * stride;
+        return Uint16Array.from({ length: count }, (_, index) => {
+          const coordinate = alternateGrid ? position : (index + 0.5) * size / count;
+          position += stride;
+          return Math.floor(coordinate);
+        });
+      };
+      const columns = grid(region.width, width);
+      const rows = grid(region.height, height);
+      const rgba = new Uint8Array(width * height * 4);
+      for (let y = 0; y < height; y += 1) {
+        const row = (region.y + rows[y]) * screen.width;
+        for (let x = 0; x < width; x += 1) {
+          const pixel = screen.pixels[row + region.x + columns[x]];
+          const index = 4 * (y * width + x);
+          rgba[index] = pixel & 255;
+          rgba[index + 1] = (pixel >>> 8) & 255;
+          rgba[index + 2] = (pixel >>> 16) & 255;
+          rgba[index + 3] = pixel >>> 24;
+        }
+      }
+      const matches = recognizeSingle({ rgba, width, height, options: { ...options, card: false, retrySampling: false } });
+      const [best, rival] = matches;
+      if (!(best?.score >= 0.78) || (rival && best.score - rival.score < 0.025)) continue;
+      const scaleX = region.width / width;
+      const scaleY = region.height / height;
+      const mapped = matches.map(match => {
+        const restored = {
+          ...match,
+          x: region.x + Math.round(match.x * scaleX),
+          y: region.y + Math.round(match.y * scaleY),
+          width: Math.round(match.width * scaleX),
+          height: Math.round(match.height * scaleY),
+        };
+        if (best.score < 0.87) restored.suggestion = true;
+        if (matchGeometry.has(match)) matchGeometry.set(restored, matchGeometry.get(match));
+        return restored;
+      });
+      const lead = mapped[0];
+      const x = Math.max(lead.x, card.x);
+      const y = Math.max(lead.y, card.y);
+      const right = Math.min(lead.x + lead.width, card.x + card.width);
+      const bottom = Math.min(lead.y + lead.height, card.y + card.height);
+      const visible = { x, y, width: right - x, height: bottom - y };
+      if (coversCardFocus(visible, focus, 0.62, 0.52)) return mapped;
+    }
+    return [];
   }
 
   function recognizeSingle(message) {
@@ -1738,26 +1958,32 @@ function mapleRecognitionWorker(onPrepared) {
     let suggestions = [];
     const coverage = subject ? subject.signature.reduce((sum, cell) => sum + cell, 0) / (SIGNATURE_SIDE ** 2 * 4) : 0;
 
-    if (subject?.transparent && coverage >= 0.97) {
-      screen.lightValues ??= Uint8Array.from(screen.pixels, luminance);
-      const focus = cardFocusBounds(screen, subject.box);
-      // A corner touch alone can be a complete pose. Try the normal search first in that case.
-      const prioritizeClipping = focus && clippedCardSides(subject.box, focus).length === 3;
-      if (prioritizeClipping) {
-        const clipped = recognizeClippedCard(screen, subject.box, options, limit, { focus, early: true });
-        if (clipped.length) return completeSubject(screen, subject, options, clipped, limit);
+    if (subject?.transparent) {
+      const opaque = opaqueAlphaPanel(screen, subject.box);
+      const panel = opaque ?? (coverage >= 0.97 ? subject.box : null);
+      if (panel) {
+        const card = recognizeCardPanel(screen, panel, options, limit, true);
+        const recovered = recoverCardMatch(screen, panel, { ...options, card: true }, limit, card);
+        if (recovered.length) return recovered;
+        if (card.length) return completeSubject(screen, { ...subject, box: panel }, options, card, limit);
+        const retry = retryCardSampling(screen, panel, options);
+        if (retry.length) return retry;
       }
-      const card = recognizeCard(screen, subject.box, options, limit);
-      if (!prioritizeClipping && focus && (!(card[0]?.score >= 0.91) || !coversCardFocus(card[0], focus))) {
-        const clipped = recognizeClippedCard(screen, subject.box, options, limit, { focus, early: true });
-        if (clipped.length) return completeSubject(screen, subject, options, clipped, limit);
-      }
-      if (card.length) return completeSubject(screen, subject, options, card, limit);
     }
     const matteCard = inferredMatteCard(screen, subject, coverage);
     const useWholeImage = !subject || options.card === true;
     const region = matteCard ?? (useWholeImage ? { x: 0, y: 0, width, height } : null);
-    const bounded = Boolean(matteCard) || options.card === true;
+    const coolBorder = region && hasCoolCardBorder(screen, region);
+    const bounded = Boolean(matteCard) || options.card === true || Boolean(coolBorder);
+    // A card already isolated by the uploader should match the exact same pixels
+    // whether it arrived with transparent padding or a solid matte.
+    if (region && !subject?.transparent && options.card === true) {
+      const panel = recognizeCardPanel(screen, region, options, limit, true);
+      if ((panel[0]?.score ?? 0) >= SCORE_FLOOR) {
+        const recovered = recoverCardMatch(screen, region, options, limit, panel);
+        return recovered.length ? recovered : completeSubject(screen, { box: region }, options, panel, limit);
+      }
+    }
     const opaqueCard = region && opaqueCardBounds(screen, region, bounded);
     if (opaqueCard) {
       if (!cardHasDetails(screen, opaqueCard)) return [];
@@ -1766,7 +1992,10 @@ function mapleRecognitionWorker(onPrepared) {
       const localized = focus?.offCenter ? focus : null;
       if (focus && !localized) {
         const matches = recognizeCardSubject({ ...screen, approximate: true }, opaqueCard, options, limit, focus);
-        if (matches.length) return completeSubject(screen, { box: opaqueCard }, options, matches, limit);
+        if (matches.length) {
+          const recovered = recoverCardMatch(screen, opaqueCard, options, limit, matches, focus);
+          return recovered.length ? recovered : completeSubject(screen, { box: opaqueCard }, options, matches, limit);
+        }
       }
       opaqueFocus = localized ?? cardFocusBounds(screen, opaqueCard);
       if (!opaqueFocus) return [];
@@ -1784,6 +2013,13 @@ function mapleRecognitionWorker(onPrepared) {
       }
     }
     if (region && !subject?.transparent) {
+      if (coolBorder && options.card !== true) {
+        const panel = recognizeCardPanel(screen, region, options, limit, true);
+        if ((panel[0]?.score ?? 0) >= SCORE_FLOOR) {
+          const recovered = recoverCardMatch(screen, region, options, limit, panel, subjectFocus);
+          return recovered.length ? recovered : completeSubject(screen, { box: region }, options, panel, limit);
+        }
+      }
       const clipped = recognizeClippedCard(screen, region, options, limit, { focus: opaqueFocus });
       if (clipped.length) return completeSubject(screen, { box: region }, options, clipped, limit);
     }
@@ -1819,6 +2055,8 @@ function mapleRecognitionWorker(onPrepared) {
     } });
     const spatialMatch = (opaqueFocus ? spatial.find(match => coversCardFocus(match, opaqueFocus)) : spatial[0]) ?? null;
     if ((spatialMatch?.score ?? 0) >= 0.88) {
+      const recovered = recoverCardMatch(screen, region, options, limit, [spatialMatch], subjectFocus);
+      if (recovered.length) return recovered;
       return completeSubject(screen, subject, options, rankSubject([spatialMatch], limit, 0.88, SCORE_FLOOR), limit);
     }
     for (const template of templates) {
@@ -1836,13 +2074,116 @@ function mapleRecognitionWorker(onPrepared) {
     const matched = rankSubject(candidates, limit, 0.87, SCORE_FLOOR, spatialMatch);
     const recovered = recoverCardMatch(screen, region, options, limit, matched.length ? matched : suggestions, subjectFocus);
     if (recovered.length) return recovered;
+    if (!matched.length && bounded && region) {
+      const retry = retryCardSampling(screen, region, options);
+      if (retry.length) return retry;
+    }
     return matched.length ? completeSubject(screen, subject, options, matched, limit) : suggestions;
+  }
+
+  function distinguishSimilarSilhouettes({ rgba, width, height }, matches) {
+    const first = matches[0];
+    const reference = first && matchGeometry.get(first);
+    if (!reference || matches.length < 2 || first.suggestion || first.score < 0.84 || first.method !== 'normalized') return matches;
+    const { x, y, width: boxWidth, height: boxHeight } = first;
+    const shorterSide = Math.min(boxWidth, boxHeight);
+    if (shorterSide < 48 || x < 0 || y < 0 || x + boxWidth > width || y + boxHeight > height) return matches;
+
+    const { template, mirrored } = reference;
+    if (template.translucent) return matches;
+    const tolerance = Math.max(2, shorterSide * 0.025);
+    const family = matches.filter(match => {
+      const geometry = matchGeometry.get(match);
+      return geometry && !match.suggestion && match.method === first.method && match.type === first.type
+        && match.score >= Math.max(SCORE_FLOOR, first.score - 0.045) && geometry.mirrored === mirrored
+        && !geometry.template.translucent && geometry.template.width === template.width && geometry.template.height === template.height
+        && Math.abs(match.x - x) <= tolerance && Math.abs(match.y - y) <= tolerance
+        && Math.abs(match.width - boxWidth) <= tolerance && Math.abs(match.height - boxHeight) <= tolerance
+        && silhouetteScore(template.silhouette, geometry.template.silhouette, false) >= 0.94;
+    });
+    if (family.length < 2) return matches;
+
+    const side = SIGNATURE_SIDE;
+    const cells = side * side;
+    const profiles = family.map(match => matchGeometry.get(match).template.silhouette);
+    const pixels = screenshotPixels(rgba, width, height);
+    const sideSamples = 8;
+    const samplesPerCell = sideSamples * sideSamples;
+    const samples = new Uint8Array(cells * samplesPerCell);
+    const outside = new Uint16Array(256);
+    const inside = new Uint16Array(256);
+    let outsideCount = 0;
+    let insideCount = 0;
+    let varied = 0;
+    let translucent = 0;
+    for (let cell = 0; cell < cells; cell += 1) {
+      const column = cell % side;
+      const row = Math.floor(cell / side);
+      const displayedColumn = mirrored ? side - 1 - column : column;
+      const values = profiles.map(profile => profile[cell]);
+      const exterior = values.every(value => value === 0);
+      const interior = values.every(value => value === 4);
+      if (values.some(value => value !== values[0])) varied += 1;
+      for (let dy = 0; dy < sideSamples; dy += 1) {
+        const yy = y + Math.floor((row + (dy + 0.5) / sideSamples) * boxHeight / side);
+        for (let dx = 0; dx < sideSamples; dx += 1) {
+          const xx = x + Math.floor((displayedColumn + (dx + 0.5) / sideSamples) * boxWidth / side);
+          const pixel = pixels[yy * width + xx];
+          if ((pixel >>> 24) < 224) translucent += 1;
+          const light = Math.round(((pixel & 255) + ((pixel >>> 8) & 255) + ((pixel >>> 16) & 255)) / 3);
+          samples[cell * samplesPerCell + dy * sideSamples + dx] = light;
+          if (exterior) { outside[light] += 1; outsideCount += 1; }
+          if (interior) { inside[light] += 1; insideCount += 1; }
+        }
+      }
+    }
+    if (varied < 2 || outsideCount < 6 * samplesPerCell || insideCount < 6 * samplesPerCell
+      || translucent > samples.length * 0.03) return matches;
+
+    const quantile = (counts, target) => {
+      let seen = 0;
+      return counts.findIndex(count => (seen += count) >= target);
+    };
+    const backdrop = quantile(outside, outsideCount * 0.10);
+    const foreground = quantile(inside, insideCount * 0.75);
+    if (backdrop - foreground < 36) return matches;
+
+    // Same-shaped variants can differ only in a hat or another small detail.
+    // Verify the outline at one shared placement over several contrast cutoffs.
+    const cutoffs = [backdrop - 4, backdrop - 8, backdrop - 14];
+    const disagreement = new Float64Array(family.length);
+    let winner;
+    for (const cutoff of cutoffs) {
+      const errors = new Float64Array(family.length);
+      for (let cell = 0; cell < cells; cell += 1) {
+        const start = cell * samplesPerCell;
+        let occupied = 0;
+        for (let i = start; i < start + samplesPerCell; i += 1) occupied += Number(samples[i] < cutoff);
+        const fill = occupied / samplesPerCell;
+        profiles.forEach((profile, index) => { errors[index] += Math.abs(fill - profile[cell] / 4); });
+      }
+      const order = Array.from(errors.keys()).sort((a, b) => errors[a] - errors[b]);
+      const best = order[0];
+      if (errors[best] > cells * 0.13 || errors[order[1]] - errors[best] < 0.22
+        || (winner !== undefined && winner !== best)) return matches;
+      winner = best;
+      errors.forEach((error, index) => { disagreement[index] += error - errors[best]; });
+    }
+    if (winner === 0) return matches;
+
+    // Only lower scores contradicted by the outline. The verified candidate
+    // keeps its measured appearance score, including the display floor.
+    const penalties = new Map(family.map((match, index) => [match,
+      Math.min(0.075, 0.60 * disagreement[index] / (varied * cutoffs.length))]));
+    const rescored = matches.map(match => ({ ...match, score: match.score - (penalties.get(match) ?? 0) }));
+    rescored.sort(compareMatches);
+    return answerName(rescored[0]) === answerName(family[winner]) ? rescored : matches;
   }
 
   function recognizeMessage(message) {
     const { rgba, width, height } = message;
     const options = message.options ?? {};
-    if (options.single) return recognizeSingle(message);
+    if (options.single) return distinguishSimilarSilhouettes(message, recognizeSingle(message));
     if (options.jpeg) return recognize(indexScreen(rgba, width, height, true), options);
     const exact = recognize(indexScreen(rgba, width, height, false), options);
     const strong = exact.filter(match => match.score >= 0.9);

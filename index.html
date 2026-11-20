@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="zh-Hant-TW">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f5f7f0">
+  <title>腦力全開！快問快答｜涼圓 出品</title>
+  <meta name="description" content="從角色圖片辨識單一 MapleStar 怪物或 NPC 的名稱。">
+  <link rel="stylesheet" href="web/app.css">
+  <script src="catalog/catalog-data.js" defer></script>
+  <script src="catalog/catalog-templates.js" defer></script>
+  <script src="recognition/read-templates.js" defer></script>
+  <script src="recognition/read-index.js" defer></script>
+  <script src="recognition/recognizer.js" defer></script>
+  <script src="web/app.js" defer></script>
+</head>
+<body>
+  <header class="site-header">
+    <div class="shell header-inner">
+      <div class="brand" aria-label="腦力全開！快問快答">
+        <div>
+          <p class="brand-name">腦力全開！快問快答</p>
+          <p class="brand-detail"><span lang="en">MapleStar</span> · 涼圓 出品</p>
+        </div>
+      </div>
+      <div class="header-tools">
+        <div class="catalog" aria-live="polite">
+          <span class="catalog-state" id="catalog-state" data-state="pending">正在載入圖鑑</span>
+          <span class="catalog-details" id="catalog-details" hidden></span>
+        </div>
+        <button class="secondary-button" type="button" id="open-catalog" disabled>瀏覽圖鑑</button>
+      </div>
+    </div>
+  </header>
+
+  <main class="shell main-content">
+    <div class="page-intro">
+      <h1>圖片辨識</h1>
+      <p>貼上單一怪物或 NPC 的圖片，找出相似度達 80% 的圖鑑候選。</p>
+    </div>
+
+    <div class="workbench">
+      <section class="panel screenshot-panel" aria-labelledby="screenshot-title">
+        <div class="panel-header">
+          <h2 id="screenshot-title">待辨識圖片</h2>
+          <div class="screenshot-actions" id="screenshot-actions" hidden>
+            <button class="text-button" type="button" id="replace-file">更換圖片</button>
+            <button class="text-button" type="button" id="replace-paste">貼上圖片</button>
+            <button class="text-button" type="button" id="clear-file">清除</button>
+          </div>
+        </div>
+
+        <input id="file-input" type="file" accept="image/png,image/jpeg,image/webp,.png,.jpg,.jpeg,.webp" hidden>
+        <div class="stage" id="dropzone">
+          <div class="drop-content" id="drop-content">
+            <div class="scan-art" aria-hidden="true">
+              <div class="scan-line"></div>
+              <div class="scan-pixels"></div>
+            </div>
+            <p class="drop-title">將圖片拖曳到這裡</p>
+            <div class="upload-actions">
+              <button class="primary-button" type="button" id="paste-file">貼上圖片</button>
+              <button class="secondary-button" type="button" id="select-file">選擇圖片</button>
+            </div>
+            <p class="paste-hint">也可按 <kbd id="paste-key">Ctrl + V</kbd> 貼上</p>
+          </div>
+          <div id="preview" class="preview" hidden>
+            <img id="screenshot" alt="待辨識的圖片">
+          </div>
+        </div>
+
+        <div class="screenshot-footer">
+          <p id="file-details">PNG、JPG、WebP · 上限 20 MB</p>
+        </div>
+        <p class="error-banner" id="screenshot-error" role="alert" hidden></p>
+      </section>
+
+      <section class="panel results-panel" aria-labelledby="results-title">
+        <div class="panel-header">
+          <h2 id="results-title">辨識結果</h2>
+          <button class="primary-button" id="copy-name" type="button" hidden>複製名稱</button>
+        </div>
+        <div class="results-notice" id="results-notice" data-state="empty" role="status" aria-live="polite">
+          <div class="notice-icon" aria-hidden="true"></div>
+          <p class="notice-title" id="notice-title">等待圖片</p>
+          <p class="notice-detail" id="notice-detail">貼上或選擇圖片後會自動辨識。</p>
+          <button class="text-button" type="button" id="retry" hidden>重新辨識</button>
+        </div>
+        <fieldset class="result-card" id="result-card" hidden>
+          <legend class="visually-hidden">依相似度排列的候選名稱</legend>
+          <div class="candidate-list" id="candidate-list"></div>
+        </fieldset>
+        <span class="visually-hidden" id="candidate-feedback" role="status"></span>
+        <p class="results-footer" id="elapsed" hidden></p>
+      </section>
+    </div>
+
+    <footer class="site-footer">
+      <span>圖片只在本機處理</span>
+      <span id="catalog-version" hidden></span>
+      <div class="release-details">
+        <span id="release-version">網頁版本 v0.0.1</span>
+        <span>發佈時間 <time id="release-time" datetime="2026-11-20T21:51:00+08:00">2026-11-20 21:51</time>（UTC+8）</span>
+      </div>
+    </footer>
+  </main>
+
+  <dialog class="catalog-dialog" id="catalog-dialog" aria-labelledby="catalog-title">
+    <div class="catalog-layout">
+      <div class="panel-header">
+        <h2 id="catalog-title">怪物與 NPC 圖鑑</h2>
+        <form method="dialog"><button class="text-button" type="submit">關閉</button></form>
+      </div>
+      <div class="catalog-controls">
+        <input id="catalog-search" type="search" placeholder="搜尋名稱或 ID" aria-label="搜尋圖鑑名稱或 ID" autofocus>
+        <select id="catalog-type" aria-label="依圖鑑類別篩選">
+          <option value="all">全部</option>
+          <option value="mob">怪物</option>
+          <option value="npc">NPC</option>
+        </select>
+      </div>
+      <div id="catalog-items" class="catalog-items" aria-label="圖鑑項目"></div>
+      <div class="catalog-pagination">
+        <button class="secondary-button" type="button" id="catalog-prev">上一頁</button>
+        <span id="catalog-page" aria-live="polite"></span>
+        <button class="secondary-button" type="button" id="catalog-next">下一頁</button>
+      </div>
+    </div>
+  </dialog>
+</body>
+</html>

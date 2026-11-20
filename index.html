@@ -6,13 +6,14 @@
   <meta name="theme-color" content="#f5f7f0">
   <title>腦力全開！快問快答｜涼圓 出品</title>
   <meta name="description" content="從角色圖片辨識單一 MapleStar 怪物或 NPC 的名稱。">
-  <link rel="stylesheet" href="web/app.css">
-  <script src="catalog/catalog-data.js" defer></script>
-  <script src="catalog/catalog-templates.js" defer></script>
+  <link rel="stylesheet" href="web/app.css?v=202611202240">
+  <script src="catalog/catalog-data.js?v=202611202240" defer></script>
+  <script src="catalog/catalog-templates.js?v=202611202240" defer></script>
   <script src="recognition/read-templates.js" defer></script>
   <script src="recognition/read-index.js" defer></script>
-  <script src="recognition/recognizer.js" defer></script>
-  <script src="web/app.js" defer></script>
+  <script src="recognition/recognizer.js?v=202611202240" defer></script>
+  <script src="recognition/locate-card.js?v=202611202240" defer></script>
+  <script src="web/app.js?v=202611202240" defer></script>
 </head>
 <body>
   <header class="site-header">
@@ -65,7 +66,21 @@
             <p class="paste-hint">也可按 <kbd id="paste-key">Ctrl + V</kbd> 貼上</p>
           </div>
           <div id="preview" class="preview" hidden>
-            <img id="screenshot" alt="待辨識的圖片">
+            <div class="crop-surface" id="crop-surface" role="group" aria-label="原始圖片">
+              <img id="screenshot" alt="待辨識的圖片" draggable="false">
+              <div class="crop-overlay" id="crop-overlay" aria-hidden="true"></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="crop-controls" id="crop-controls" hidden>
+          <p id="crop-message" class="crop-message" hidden></p>
+          <div class="crop-choices" id="crop-choices" role="group" aria-label="辨識範圍" hidden></div>
+          <div class="crop-actions">
+            <button class="secondary-button" id="adjust-crop" type="button">調整範圍</button>
+            <button class="text-button" id="use-full-image" type="button" hidden>使用整張圖片</button>
+            <button class="primary-button" id="confirm-crop" type="button" hidden>辨識此範圍</button>
+            <button class="text-button" id="cancel-crop" type="button" hidden>取消</button>
           </div>
         </div>
 
@@ -100,7 +115,7 @@
       <span id="catalog-version" hidden></span>
       <div class="release-details">
         <span id="release-version">網頁版本 v0.0.1</span>
-        <span>發佈時間 <time id="release-time" datetime="2026-11-20T22:29:00+08:00">2026-11-20 22:29</time>（UTC+8）</span>
+        <span>發佈時間 <time id="release-time" datetime="2026-11-20T22:40:00+08:00">2026-11-20 22:40</time>（UTC+8）</span>
       </div>
     </footer>
   </main>

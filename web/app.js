@@ -7,6 +7,7 @@
   const entriesById = new Map(entries.map((entry) => [`${entry.type}:${entry.id}`, entry]));
   const types = new Map([['image/png', 'png'], ['image/jpeg', 'jpg'], ['image/webp', 'webp']]);
   const maxFileSize = 20 * 1024 * 1024;
+  const maxRefinementPixels = 1_500_000;
   const catalogPageSize = 24;
   const candidateLimit = 5;
   const minimumCandidateScore = 0.8;
@@ -16,6 +17,9 @@
   const stage = get('dropzone');
   const preview = get('preview');
   const screenshot = get('screenshot');
+  const cropSurface = get('crop-surface');
+  const cropOverlay = get('crop-overlay');
+  const cropChoices = get('crop-choices');
   const resultCard = get('result-card');
   const candidateList = get('candidate-list');
   const copyButton = get('copy-name');
@@ -32,6 +36,11 @@
   let pendingRecognition = false;
   let startedAt;
   let screenshotLoaded = false;
+  let proposedRegions = [];
+  // An undefined selection awaits a choice. Null means use the whole image.
+  let selectedRegion = null;
+  let draftRegion;
+  let cropPointer;
   let catalogPage = 0;
   let selectedName;
   let pendingCopy;
@@ -187,6 +196,13 @@
     screenshotUrl = undefined;
     screenshot.removeAttribute('src');
     preview.hidden = true;
+    proposedRegions = [];
+    selectedRegion = null;
+    draftRegion = undefined;
+    cropPointer = undefined;
+    cropChoices.replaceChildren();
+    cropOverlay.replaceChildren();
+    get('crop-controls').hidden = true;
     stage.classList.remove('has-preview');
     get('drop-content').hidden = false;
     get('screenshot-actions').hidden = true;
@@ -225,16 +241,256 @@
     const { naturalWidth, naturalHeight } = screenshot;
     const previewScale = Math.max(1, Math.min(4, 180 / Math.max(naturalWidth, naturalHeight)));
     screenshot.style.setProperty('--preview-width', `${Math.round(naturalWidth * previewScale)}px`);
+    screenshot.style.setProperty('--preview-ratio', naturalWidth / naturalHeight);
     preview.hidden = false;
     stage.classList.add('has-preview');
     get('drop-content').hidden = true;
     get('screenshot-actions').hidden = false;
     get('file-details').textContent = `${file.name || '剪貼簿圖片'} · ${naturalWidth} × ${naturalHeight}`;
-    recognize();
+    proposedRegions = detectRegions();
+    cropChoices.replaceChildren(...proposedRegions.map((region, index) => {
+      const button = element('button', 'secondary-button crop-choice', `範圍 ${index + 1}`);
+      button.type = 'button';
+      button.addEventListener('click', () => selectCrop(region));
+      return button;
+    }));
+    get('crop-controls').hidden = false;
+    selectCrop(proposedRegions.length > 1 ? undefined : proposedRegions[0] ?? null);
   }
 
+  function wholeImage() {
+    return { x: 0, y: 0, width: screenshot.naturalWidth, height: screenshot.naturalHeight };
+  }
+
+  function imagePixels(region, maxSide, maxPixels, smooth = false) {
+    const scale = Math.min(1, maxSide / Math.max(region.width, region.height), Math.sqrt(maxPixels / (region.width * region.height)));
+    const width = Math.max(1, Math.floor(region.width * scale));
+    const height = Math.max(1, Math.floor(region.height * scale));
+    const canvas = document.createElement('canvas');
+    canvas.width = width;
+    canvas.height = height;
+    try {
+      const context = canvas.getContext('2d', { willReadFrequently: true });
+      context.imageSmoothingEnabled = smooth;
+      context.drawImage(screenshot, region.x, region.y, region.width, region.height, 0, 0, width, height);
+      const { data } = context.getImageData(0, 0, width, height);
+      return { rgba: new Uint8Array(data.buffer), width, height, scale };
+    } finally {
+      canvas.width = 0;
+      canvas.height = 0;
+    }
+  }
+
+  function detectRegions() {
+    if (typeof window.locateCardRegions !== 'function') return [];
+    const image = wholeImage();
+    try {
+      const { rgba, width, height } = imagePixels(image, 720, 720 * 720, true);
+      const sx = image.width / width;
+      const sy = image.height / height;
+      return window.locateCardRegions(rgba, width, height).slice(0, 4).flatMap((region) => {
+        const x = Math.max(0, Math.floor(region.x * sx));
+        const y = Math.max(0, Math.floor(region.y * sy));
+        const right = Math.min(image.width, Math.ceil((region.x + region.width) * sx));
+        const bottom = Math.min(image.height, Math.ceil((region.y + region.height) * sy));
+        if (!(right - x >= 4 && bottom - y >= 4)) return [];
+        const mapped = { x, y, width: right - x, height: bottom - y, kind: region.kind };
+        return [refineCardRegion(mapped, image, Math.max(sx, sy))];
+      });
+    } catch {
+      return [];
+    }
+  }
+
+  function refineCardRegion(region, image, quantum) {
+    if (region.kind !== 'card' || quantum <= 1) return region;
+    const padding = Math.max(8, Math.ceil(2 * quantum));
+    const right = region.x + region.width;
+    const bottom = region.y + region.height;
+    const x = Math.max(0, region.x - padding);
+    const y = Math.max(0, region.y - padding);
+    const searchRegion = { x, y, width: Math.min(image.width, right + padding) - x, height: Math.min(image.height, bottom + padding) - y };
+    const card = findCardInWindow(searchRegion);
+    if (!card) return region;
+    const overlap = Math.max(0, Math.min(right, card.x + card.width) - Math.max(region.x, card.x))
+      * Math.max(0, Math.min(bottom, card.y + card.height) - Math.max(region.y, card.y));
+    return overlap >= 0.85 * Math.max(region.width * region.height, card.width * card.height) ? card : region;
+  }
+
+  function findCardInWindow(region) {
+    if (typeof window.locateCardRegions !== 'function' || region.width * region.height > maxRefinementPixels) return null;
+    try {
+      const { rgba, width, height } = imagePixels(region, Infinity, maxRefinementPixels);
+      const boxes = window.locateCardRegions(rgba, width, height, { refine: true });
+      if (boxes.length === 1 && boxes[0].kind === 'card') {
+        const box = boxes[0];
+        return { ...box, x: region.x + box.x, y: region.y + box.y };
+      }
+    } catch {
+      // Use the original region if its pixels cannot be read here.
+    }
+    return null;
+  }
+
+  function renderCropOverlay() {
+    const multiple = proposedRegions.length > 1;
+    const visible = draftRegion ? [draftRegion] : multiple ? [...proposedRegions] : [];
+    if (!draftRegion && selectedRegion && !visible.includes(selectedRegion)) visible.push(selectedRegion);
+    const image = wholeImage();
+    cropOverlay.replaceChildren(...visible.map((region, index) => {
+      const frame = element('div', 'crop-frame');
+      frame.classList.toggle('is-selected', region === selectedRegion);
+      frame.classList.toggle('is-draft', !!draftRegion);
+      frame.style.left = `${region.x / image.width * 100}%`;
+      frame.style.top = `${region.y / image.height * 100}%`;
+      frame.style.width = `${region.width / image.width * 100}%`;
+      frame.style.height = `${region.height / image.height * 100}%`;
+      if (multiple && !draftRegion && index < proposedRegions.length) {
+        frame.dataset.regionIndex = index;
+        frame.append(element('span', 'crop-frame-label', index + 1));
+      }
+      return frame;
+    }));
+  }
+
+  function renderCropControls() {
+    const editing = !!draftRegion;
+    const message = get('crop-message');
+    message.hidden = !editing && selectedRegion !== undefined;
+    message.textContent = editing
+      ? '拖曳框選。方向鍵移動，Shift 加方向鍵調整大小，Enter 確認。'
+      : '找到多個範圍，請選一個辨識。';
+    cropSurface.toggleAttribute('data-editing', editing);
+    if (editing) cropSurface.setAttribute('aria-describedby', 'crop-message');
+    else cropSurface.removeAttribute('aria-describedby');
+    cropSurface.tabIndex = editing ? 0 : -1;
+    cropChoices.hidden = editing || proposedRegions.length < 2;
+    Array.from(cropChoices.children).forEach((button, index) => {
+      button.setAttribute('aria-pressed', String(proposedRegions[index] === selectedRegion));
+    });
+    get('adjust-crop').hidden = editing;
+    get('use-full-image').hidden = editing || selectedRegion === null;
+    get('confirm-crop').hidden = !editing;
+    get('cancel-crop').hidden = !editing;
+    renderCropOverlay();
+  }
+
+  function selectCrop(region) {
+    requestId += 1;
+    pendingRecognition = false;
+    selectedRegion = region;
+    draftRegion = undefined;
+    cropPointer = undefined;
+    renderCropControls();
+    if (selectedRegion === undefined) {
+      showNotice('empty', '請選擇辨識範圍', '選取圖片中的一個範圍後，就會開始辨識。');
+    } else {
+      recognize();
+    }
+  }
+
+  function startCropAdjustment() {
+    requestId += 1;
+    pendingRecognition = false;
+    const image = wholeImage();
+    const x = Math.floor(image.width * 0.1);
+    const y = Math.floor(image.height * 0.1);
+    draftRegion = { ...(selectedRegion ?? proposedRegions[0] ?? { x, y, width: image.width - 2 * x, height: image.height - 2 * y }) };
+    renderCropControls();
+    showNotice('empty', '正在調整辨識範圍', '確認範圍後開始辨識。');
+    cropSurface.focus({ preventScroll: true });
+  }
+
+  function finishCropAdjustment(apply) {
+    if (!draftRegion) return;
+    const { x, y, width, height } = draftRegion;
+    const region = { x, y, width, height };
+    selectCrop(apply ? findCardInWindow(region) ?? region : selectedRegion);
+    get('adjust-crop').focus({ preventScroll: true });
+  }
+
+  function clamp(value, minimum, maximum) {
+    return Math.min(maximum, Math.max(minimum, value));
+  }
+
+  function imagePoint(event) {
+    const bounds = screenshot.getBoundingClientRect();
+    return {
+      x: Math.round(clamp((event.clientX - bounds.left) / bounds.width, 0, 1) * screenshot.naturalWidth),
+      y: Math.round(clamp((event.clientY - bounds.top) / bounds.height, 0, 1) * screenshot.naturalHeight),
+    };
+  }
+
+  function moveCropPointer(event) {
+    if (cropPointer?.id !== event.pointerId) return;
+    const point = imagePoint(event);
+    const { start, previous } = cropPointer;
+    const width = Math.abs(point.x - start.x);
+    const height = Math.abs(point.y - start.y);
+    draftRegion = width >= 4 && height >= 4
+      ? { x: Math.min(point.x, start.x), y: Math.min(point.y, start.y), width, height }
+      : previous;
+    renderCropOverlay();
+  }
+
+  get('adjust-crop').addEventListener('click', startCropAdjustment);
+  get('use-full-image').addEventListener('click', () => {
+    selectCrop(null);
+    get('adjust-crop').focus({ preventScroll: true });
+  });
+  get('confirm-crop').addEventListener('click', () => finishCropAdjustment(true));
+  get('cancel-crop').addEventListener('click', () => finishCropAdjustment(false));
+  cropOverlay.addEventListener('click', (event) => {
+    const frame = event.target.closest('[data-region-index]');
+    if (!frame) return;
+    const index = Number(frame.dataset.regionIndex);
+    selectCrop(proposedRegions[index]);
+    cropChoices.children[index].focus({ preventScroll: true });
+  });
+
+  cropSurface.addEventListener('pointerdown', (event) => {
+    if (!draftRegion || cropPointer || event.button !== 0) return;
+    event.preventDefault();
+    cropPointer = { id: event.pointerId, start: imagePoint(event), previous: draftRegion };
+    if (event.isTrusted) cropSurface.setPointerCapture(event.pointerId);
+  });
+  cropSurface.addEventListener('pointermove', moveCropPointer);
+  cropSurface.addEventListener('pointerup', (event) => {
+    if (cropPointer?.id !== event.pointerId) return;
+    moveCropPointer(event);
+    cropPointer = undefined;
+  });
+  cropSurface.addEventListener('pointercancel', (event) => {
+    if (cropPointer?.id !== event.pointerId) return;
+    draftRegion = cropPointer.previous;
+    cropPointer = undefined;
+    renderCropOverlay();
+  });
+  cropSurface.addEventListener('keydown', (event) => {
+    if (!draftRegion) return;
+    if (event.key === 'Enter' || event.key === 'Escape') {
+      event.preventDefault();
+      finishCropAdjustment(event.key === 'Enter');
+      return;
+    }
+    const direction = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] }[event.key];
+    if (!direction) return;
+    event.preventDefault();
+    const image = wholeImage();
+    const step = Math.max(1, Math.round(Math.max(draftRegion.width, draftRegion.height) / 100));
+    const [dx, dy] = direction.map((value) => value * step);
+    if (event.shiftKey) {
+      draftRegion.width = clamp(draftRegion.width + dx, Math.min(4, image.width), image.width - draftRegion.x);
+      draftRegion.height = clamp(draftRegion.height + dy, Math.min(4, image.height), image.height - draftRegion.y);
+    } else {
+      draftRegion.x = clamp(draftRegion.x + dx, 0, image.width - draftRegion.width);
+      draftRegion.y = clamp(draftRegion.y + dy, 0, image.height - draftRegion.height);
+    }
+    renderCropOverlay();
+  });
+
   function recognize() {
-    if (!screenshotLoaded) return;
+    if (!screenshotLoaded || selectedRegion === undefined || draftRegion) return;
     if (workerState === 'error') {
       showNotice('error', '無法辨識圖片', workerIssue);
       return;
@@ -250,29 +506,16 @@
     }
 
     showNotice('busy', '正在辨識', '正在比對本機圖鑑中的怪物與 NPC。');
-    const { naturalWidth, naturalHeight } = screenshot;
-    const scale = Math.min(1, 4200 / Math.max(naturalWidth, naturalHeight), Math.sqrt(8_400_000 / (naturalWidth * naturalHeight)));
-    const width = Math.max(1, Math.floor(naturalWidth * scale));
-    const height = Math.max(1, Math.floor(naturalHeight * scale));
-    const canvas = document.createElement('canvas');
-    canvas.width = width;
-    canvas.height = height;
     try {
-      const context = canvas.getContext('2d', { willReadFrequently: true });
-      context.imageSmoothingEnabled = false;
-      context.drawImage(screenshot, 0, 0, width, height);
-      const { data } = context.getImageData(0, 0, width, height);
-      const rgba = new Uint8Array(data.buffer);
+      const { rgba, width, height, scale } = imagePixels(selectedRegion ?? wholeImage(), 4200, 8_400_000);
       startedAt = performance.now();
       const jpeg = scale < 1 || ['image/jpeg', 'image/webp'].includes(currentFile.type) || /\.(jpe?g|webp)$/i.test(currentFile.name);
       const options = { single: true, limit: candidateLimit, jpeg };
+      if (selectedRegion?.kind === 'card') options.card = true;
       worker.postMessage({ type: 'recognize', requestId: ++requestId, rgba, width, height, options }, [rgba.buffer]);
       inFlightId = requestId;
     } catch {
       showNotice('error', '無法讀取圖片', '請換一張圖片，或縮小圖片尺寸後再試。', true);
-    } finally {
-      canvas.width = 0;
-      canvas.height = 0;
     }
   }
 

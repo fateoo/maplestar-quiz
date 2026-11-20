@@ -171,7 +171,20 @@ kbd { font: 600 .78rem system-ui, sans-serif; background: white; border: 1px sol
   border-radius: .5rem;
   background: repeating-conic-gradient(#e4eae1 0% 25%, #f4f7f2 0% 50%) 50% / .85rem .85rem;
 }
-.preview img { display: block; width: var(--preview-width, auto); height: auto; max-width: 100%; max-height: min(68vh, 55rem); object-fit: contain; image-rendering: pixelated; }
+.crop-surface { --preview-height: min(68vh, 55rem); position: relative; }
+.crop-surface img { display: block; width: min(var(--preview-width), calc(var(--preview-ratio) * var(--preview-height))); height: auto; max-width: 100%; image-rendering: pixelated; }
+.crop-surface[data-editing] { cursor: crosshair; touch-action: none; user-select: none; }
+.crop-surface:focus-visible { outline: 3px solid #a84923; outline-offset: 3px; }
+.crop-overlay { position: absolute; inset: 0; overflow: hidden; pointer-events: none; }
+.crop-frame { position: absolute; border: 2px dashed #fff; outline: 1px solid #325746; outline-offset: -2px; }
+.crop-frame[data-region-index] { pointer-events: auto; cursor: pointer; }
+.crop-frame.is-selected { border-style: solid; border-color: #267451; box-shadow: 0 0 0 1px #fff; }
+.crop-frame.is-draft { border-style: solid; border-color: white; box-shadow: 0 0 0 100vmax #192c2280; }
+.crop-frame-label { position: absolute; top: 0; left: 0; background: #205740; color: white; padding: .08rem .35rem; border-bottom-right-radius: .28rem; font-size: .76rem; font-weight: 700; }
+.crop-controls { display: grid; gap: .4rem; margin: .75rem 1.2rem 0; }
+.crop-message { color: var(--muted); font-size: .88rem; line-height: 1.5; }
+.crop-choices, .crop-actions { display: flex; gap: .35rem .45rem; flex-wrap: wrap; align-items: center; }
+.crop-choice[aria-pressed="true"] { border-color: var(--green); background: var(--green-soft); }
 
 .screenshot-footer { min-height: 3.25rem; padding: .65rem 1.2rem; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: .6rem; }
 .screenshot-footer p { overflow-wrap: anywhere; }
@@ -270,7 +283,8 @@ kbd { font: 600 .78rem system-ui, sans-serif; background: white; border: 1px sol
   .results-panel { min-height: 0; }
   .results-notice { min-height: 12rem; }
   .candidate-choice { --candidate-image-size: 3.8rem; }
-  .preview img { max-height: 65vh; }
+  .crop-surface { --preview-height: 65vh; }
+  .crop-controls { margin-inline: .9rem; }
 }
 
 @media (max-width: 420px) {

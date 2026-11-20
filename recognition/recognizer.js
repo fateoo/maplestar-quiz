@@ -1127,7 +1127,7 @@ function mapleRecognitionWorker(onPrepared) {
     return { x: card.x + left, y: card.y + top, width, height };
   }
 
-  function offCenterCardFocus(screen, card) {
+  function cardSubjectFocus(screen, card) {
     const shorterSide = Math.min(card.width, card.height);
     const distance = Math.max(1, Math.round(shorterSide / 140));
     const tileSize = Math.max(3, Math.round(shorterSide / 72));
@@ -1190,11 +1190,44 @@ function mapleRecognitionWorker(onPrepared) {
     const top = Math.max(0, (primary.top - 1) * tileSize);
     const width = Math.min(card.width, (primary.right + 2) * tileSize) - left;
     const height = Math.min(card.height, (primary.bottom + 2) * tileSize) - top;
-    const focus = cardFocusBounds(screen, { x: card.x + left, y: card.y + top, width, height }, distance);
-    if (!focus || focus.width * focus.height < card.width * card.height * 0.08) return null;
+    const connected = { x: card.x + left, y: card.y + top, width, height };
+    const focus = cardFocusBounds(screen, connected, distance);
+    if (!focus) return null;
+    const coverage = focus.width * focus.height / (card.width * card.height);
+    if (coverage < 0.08) return null;
     const centerX = (focus.x + focus.width / 2 - card.x) / card.width;
     const centerY = (focus.y + focus.height / 2 - card.y) / card.height;
-    return centerX < 0.33 || centerX > 0.67 || centerY < 0.32 || centerY > 0.68 ? focus : null;
+    const offCenter = centerX < 0.33 || centerX > 0.67 || centerY < 0.32 || centerY > 0.68;
+    if (offCenter) return { ...focus, offCenter };
+    if (shorterSide < 160 || coverage > 0.50) return null;
+    return { ...focus, ink: cardInkBounds(screen, card, connected, focus) };
+  }
+
+  function cardInkBounds(screen, card, region, focus) {
+    let left = region.x + region.width;
+    let top = region.y + region.height;
+    let right = region.x - 1;
+    let bottom = region.y - 1;
+    let darkPixels = 0;
+    for (let y = region.y; y < region.y + region.height; y += 1) {
+      for (let x = region.x; x < region.x + region.width; x += 1) {
+        if (screen.lightValues[y * screen.width + x] > 80) continue;
+        left = Math.min(left, x);
+        right = Math.max(right, x);
+        top = Math.min(top, y);
+        bottom = Math.max(bottom, y);
+        darkPixels += 1;
+      }
+    }
+    const pixels = card.width * card.height;
+    if (darkPixels < pixels * 0.01 || darkPixels > pixels * 0.33) return null;
+    const width = right - left + 1;
+    const height = bottom - top + 1;
+    const area = width * height;
+    if (area < pixels * 0.06 || area >= 0.90 * focus.width * focus.height) return null;
+    if (left < card.x + 2 || top < card.y + 2 || right >= card.x + card.width - 2
+      || bottom >= card.y + card.height - 2) return null;
+    return { x: left, y: top, width, height };
   }
 
   function hasOpaqueCardCorners(screen, region) {
@@ -1522,16 +1555,35 @@ function mapleRecognitionWorker(onPrepared) {
     return matches;
   }
 
+  function searchCardSubject(screen, card, options, limit, focus) {
+    const ranked = rankCardTemplates(screen, focus, options);
+    const foreground = rankCardForeground(screen, focus, ranked);
+    return searchFocusedCard(screen, card, ranked, foreground, limit, focus)
+      .filter(match => coversCardFocus(match, focus));
+  }
+
+  function recognizeCardSubject(screen, card, options, limit, focus) {
+    if (focus.offCenter) return searchCardSubject(screen, card, options, limit, focus);
+
+    // A compact centered subject can be surrounded by bright card effects. Require
+    // a convincing fit before using its shaded outline in place of the wider search.
+    for (const region of [focus.ink, focus]) {
+      if (!region) continue;
+      const matches = searchCardSubject(screen, card, options, limit, region);
+      const [best, rival] = matches;
+      if (best?.score >= 0.92 && (!rival || best.score - rival.score >= 0.025)) return matches;
+    }
+    return [];
+  }
+
   function recognizeCard(source, card, options, candidateLimit, silhouette, preferredFocus, quietFocus) {
     source.lightValues ??= Uint8Array.from(source.pixels, luminance);
     const screen = { ...source, approximate: true };
     if (!silhouette && !cardHasDetails(screen, card)) return [];
-    const localized = !silhouette && (preferredFocus === undefined ? offCenterCardFocus(screen, card) : preferredFocus);
+    const localized = !silhouette && (preferredFocus === undefined ? cardSubjectFocus(screen, card) : preferredFocus);
     if (localized) {
-      const ranked = rankCardTemplates(screen, localized, options);
-      const foreground = rankCardForeground(screen, localized, ranked);
-      return searchFocusedCard(screen, card, ranked, foreground, candidateLimit, localized)
-        .filter(match => coversCardFocus(match, localized));
+      const matches = recognizeCardSubject(screen, card, options, candidateLimit, localized);
+      if (localized.offCenter || matches.length) return matches;
     }
     const ranked = rankCardTemplates(screen, card, options, silhouette);
     const initial = ranked.slice(0, 480);
@@ -1639,7 +1691,12 @@ function mapleRecognitionWorker(onPrepared) {
     const opaqueCard = region && opaqueCardBounds(screen, region, bounded);
     if (opaqueCard) {
       if (!cardHasDetails(screen, opaqueCard)) return [];
-      const localized = offCenterCardFocus(screen, opaqueCard);
+      const focus = cardSubjectFocus(screen, opaqueCard);
+      const localized = focus?.offCenter ? focus : null;
+      if (focus && !localized) {
+        const matches = recognizeCardSubject({ ...screen, approximate: true }, opaqueCard, options, limit, focus);
+        if (matches.length) return completeSubject(screen, { box: opaqueCard }, options, matches, limit);
+      }
       opaqueFocus = localized ?? cardFocusBounds(screen, opaqueCard);
       if (!opaqueFocus) return [];
       const substantial = opaqueFocus.width * opaqueFocus.height >= 0.10 * opaqueCard.width * opaqueCard.height;

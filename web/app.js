@@ -25,6 +25,12 @@
   const copyButton = get('copy-name');
   const candidateFeedback = get('candidate-feedback');
   const dialog = get('catalog-dialog');
+  const compareDialog = get('compare-dialog');
+  const compareButton = get('open-compare');
+  const compareSource = get('compare-source');
+  const compareName = get('compare-name');
+  const compareSprite = get('compare-sprite');
+  const compareCopy = get('compare-copy');
 
   let worker;
   let workerState = 'pending';
@@ -167,10 +173,11 @@
   }
 
   function showNotice(state, title, detail, canRetry = false) {
+    if (compareDialog.open) compareDialog.close();
     get('elapsed').hidden = true;
     resultCard.hidden = true;
     candidateList.replaceChildren();
-    copyButton.hidden = true;
+    get('result-actions').hidden = true;
     selectedName = undefined;
     resetCopyFeedback();
     const notice = get('results-notice');
@@ -239,7 +246,7 @@
 
     screenshotLoaded = true;
     const { naturalWidth, naturalHeight } = screenshot;
-    const previewScale = Math.max(1, Math.min(4, 180 / Math.max(naturalWidth, naturalHeight)));
+    const previewScale = Math.max(1, Math.min(4, 420 / Math.max(naturalWidth, naturalHeight)));
     screenshot.style.setProperty('--preview-width', `${Math.round(naturalWidth * previewScale)}px`);
     screenshot.style.setProperty('--preview-ratio', naturalWidth / naturalHeight);
     preview.hidden = false;
@@ -262,17 +269,22 @@
     return { x: 0, y: 0, width: screenshot.naturalWidth, height: screenshot.naturalHeight };
   }
 
-  function imagePixels(region, maxSide, maxPixels, smooth = false) {
+  function drawScreenshot(canvas, region, maxSide, maxPixels, smooth, willReadFrequently = false) {
     const scale = Math.min(1, maxSide / Math.max(region.width, region.height), Math.sqrt(maxPixels / (region.width * region.height)));
     const width = Math.max(1, Math.floor(region.width * scale));
     const height = Math.max(1, Math.floor(region.height * scale));
-    const canvas = document.createElement('canvas');
     canvas.width = width;
     canvas.height = height;
+    const context = canvas.getContext('2d', { willReadFrequently });
+    context.imageSmoothingEnabled = smooth;
+    context.drawImage(screenshot, region.x, region.y, region.width, region.height, 0, 0, width, height);
+    return { context, width, height, scale };
+  }
+
+  function imagePixels(region, maxSide, maxPixels, smooth = false) {
+    const canvas = document.createElement('canvas');
     try {
-      const context = canvas.getContext('2d', { willReadFrequently: true });
-      context.imageSmoothingEnabled = smooth;
-      context.drawImage(screenshot, region.x, region.y, region.width, region.height, 0, 0, width, height);
+      const { context, width, height, scale } = drawScreenshot(canvas, region, maxSide, maxPixels, smooth, true);
       const { data } = context.getImageData(0, 0, width, height);
       return { rgba: new Uint8Array(data.buffer), width, height, scale };
     } finally {
@@ -548,7 +560,9 @@
     pendingCopy = undefined;
     clearTimeout(copyFeedbackTimer);
     copyButton.textContent = '複製名稱';
+    compareCopy.textContent = '複製名稱';
     candidateFeedback.textContent = '';
+    get('compare-feedback').textContent = '';
   }
 
   function selectCandidate(name) {
@@ -557,7 +571,53 @@
     selectedName = name;
     name.id = 'result-name';
     resetCopyFeedback();
+    compareButton.disabled = !name.closest('.candidate-row').querySelector('img');
+    if (compareDialog.open) updateComparison();
   }
+
+  function updateComparison() {
+    const row = selectedName.closest('.candidate-row');
+    const image = row.querySelector('img');
+    if (image) compareSprite.src = image.src;
+    else compareSprite.removeAttribute('src');
+    compareName.textContent = selectedName.textContent;
+    const count = candidateList.childElementCount;
+    const position = Array.from(candidateList.children).indexOf(row) + 1;
+    get('compare-navigation').hidden = count < 2;
+    get('compare-position').textContent = `${position} / ${count}`;
+    get('compare-prev').disabled = !row.previousElementSibling;
+    get('compare-next').disabled = !row.nextElementSibling;
+  }
+
+  function moveComparison(direction) {
+    const row = selectedName.closest('.candidate-row');
+    const next = direction < 0 ? row.previousElementSibling : row.nextElementSibling;
+    if (!next) return;
+    next.querySelector('.candidate-option').checked = true;
+    selectCandidate(next.querySelector('.entity-name'));
+  }
+
+  compareButton.addEventListener('click', () => {
+    if (!screenshotLoaded || !selectedName?.closest('.candidate-row').querySelector('img')) return;
+    try {
+      drawScreenshot(compareSource, selectedRegion ?? wholeImage(), 1200, 1200 ** 2, true);
+    } catch {
+      showFileError('無法放大這張圖片，請重新貼上後再試。');
+      return;
+    }
+    get('compare-source-label').textContent = selectedRegion ? '待辨識範圍' : '待辨識圖片';
+    updateComparison();
+    compareDialog.showModal();
+  });
+  get('compare-prev').addEventListener('click', () => moveComparison(-1));
+  get('compare-next').addEventListener('click', () => moveComparison(1));
+  compareDialog.addEventListener('close', () => {
+    if (compareDialog.open) return;
+    compareSource.width = 0;
+    compareSource.height = 0;
+    compareSprite.removeAttribute('src');
+    resetCopyFeedback();
+  });
 
   function renderCandidate(result, index) {
     const match = loadEntry(result);
@@ -602,25 +662,31 @@
     const elapsedNode = get('elapsed');
     elapsedNode.textContent = elapsed >= 1000 ? `耗時 ${(elapsed / 1000).toFixed(1)} 秒` : `耗時 ${Math.round(elapsed)} 毫秒`;
     get('results-notice').hidden = true;
-    copyButton.hidden = false;
+    get('result-actions').hidden = false;
     elapsedNode.hidden = false;
     resultCard.hidden = false;
     const reviewMessage = reviewing ? `${note.textContent} ` : '';
     candidateFeedback.textContent = `${reviewMessage}找到 ${candidateList.childElementCount} 個候選名稱，已選取 ${selectedName.textContent}。`;
   }
 
-  copyButton.addEventListener('click', async () => {
-    const name = selectedName;
+  async function copySelectedName(event) {
+    const button = event.currentTarget;
+    const comparing = button === compareCopy;
+    const name = comparing ? compareName : selectedName;
     if (!name) return;
     clearTimeout(copyFeedbackTimer);
     const attempt = {};
     pendingCopy = attempt;
     const copied = await copyResultName(name, attempt);
     if (pendingCopy !== attempt) return;
-    copyButton.textContent = copied ? '已複製' : '請手動複製';
-    candidateFeedback.textContent = copied ? `已複製 ${name.textContent}` : '名稱已選取，可手動複製。';
+    button.textContent = copied ? '已複製' : '請手動複製';
+    const feedback = comparing ? get('compare-feedback') : candidateFeedback;
+    feedback.textContent = copied ? `已複製 ${name.textContent}` : '名稱已選取，可手動複製。';
     copyFeedbackTimer = setTimeout(resetCopyFeedback, 2000);
-  });
+  }
+
+  copyButton.addEventListener('click', copySelectedName);
+  compareCopy.addEventListener('click', copySelectedName);
 
   function catalogSearchKey(value) {
     return String(value).normalize('NFKC').toLowerCase().replace(/[^\p{L}\p{M}\p{N}]+/gu, '');
@@ -675,7 +741,7 @@
   });
 
   document.addEventListener('paste', (event) => {
-    if (dialog.open) return;
+    if (dialog.open || compareDialog.open) return;
     const file = Array.from(event.clipboardData?.files || []).find((item) => item.type.startsWith('image/'))
       || Array.from(event.clipboardData?.items || []).find((item) => item.kind === 'file' && item.type.startsWith('image/'))?.getAsFile();
     if (!file) return;
@@ -705,7 +771,7 @@
   window.addEventListener('dragover', (event) => {
     if (!event.dataTransfer.types.includes('Files')) return;
     event.preventDefault();
-    if (dialog.open) return;
+    if (dialog.open || compareDialog.open) return;
     event.dataTransfer.dropEffect = 'copy';
     stage.classList.toggle('is-dragging', stage.contains(event.target));
   });
@@ -713,7 +779,7 @@
     if (!event.dataTransfer.files.length) return;
     event.preventDefault();
     stage.classList.remove('is-dragging');
-    if (!dialog.open) chooseFile(event.dataTransfer.files[0]);
+    if (!dialog.open && !compareDialog.open) chooseFile(event.dataTransfer.files[0]);
   });
   stage.addEventListener('dragleave', (event) => {
     if (!stage.contains(event.relatedTarget)) stage.classList.remove('is-dragging');

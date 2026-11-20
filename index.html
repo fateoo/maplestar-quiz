@@ -6,14 +6,14 @@
   <meta name="theme-color" content="#f5f7f0">
   <title>腦力全開！快問快答｜涼圓 出品</title>
   <meta name="description" content="從角色圖片辨識單一 MapleStar 怪物或 NPC 的名稱。">
-  <link rel="stylesheet" href="web/app.css?v=0.0.4">
+  <link rel="stylesheet" href="web/app.css?v=0.0.5">
   <script src="catalog/catalog-data.js?v=202611202240" defer></script>
   <script src="catalog/catalog-templates.js?v=202611202240" defer></script>
   <script src="recognition/read-templates.js" defer></script>
   <script src="recognition/read-index.js" defer></script>
   <script src="recognition/recognizer.js?v=0.0.3" defer></script>
   <script src="recognition/locate-card.js?v=202611202240" defer></script>
-  <script src="web/app.js?v=0.0.3" defer></script>
+  <script src="web/app.js?v=0.0.5" defer></script>
 </head>
 <body>
   <header class="site-header">
@@ -93,7 +93,10 @@
       <section class="panel results-panel" aria-labelledby="results-title">
         <div class="panel-header">
           <h2 id="results-title">辨識結果</h2>
-          <button class="primary-button" id="copy-name" type="button" hidden>複製名稱</button>
+          <div class="result-actions" id="result-actions" hidden>
+            <button class="secondary-button" id="open-compare" type="button" aria-haspopup="dialog">放大比較</button>
+            <button class="primary-button" id="copy-name" type="button">複製名稱</button>
+          </div>
         </div>
         <div class="results-notice" id="results-notice" data-state="empty" role="status" aria-live="polite">
           <div class="notice-icon" aria-hidden="true"></div>
@@ -115,11 +118,37 @@
       <span>圖片只在本機處理</span>
       <span id="catalog-version" hidden></span>
       <div class="release-details">
-        <span id="release-version">網頁版本 v0.0.4</span>
-        <span>發佈時間 <time id="release-time" datetime="2026-11-20T22:53:45+08:00">2026-11-20 22:53:45</time>（UTC+8）</span>
+        <span id="release-version">網頁版本 v0.0.5</span>
+        <span>發佈時間 <time id="release-time" datetime="2026-11-20T22:56:03+08:00">2026-11-20 22:56:03</time>（UTC+8）</span>
       </div>
     </footer>
   </main>
+
+  <dialog class="compare-dialog" id="compare-dialog" aria-labelledby="compare-title">
+    <div class="panel-header">
+      <h2 id="compare-title">放大比較</h2>
+      <form method="dialog"><button class="text-button" type="submit" autofocus>關閉</button></form>
+    </div>
+    <div class="compare-grid">
+      <figure class="compare-panel">
+        <figcaption id="compare-source-label">待辨識圖片</figcaption>
+        <div class="compare-preview"><canvas id="compare-source" width="0" height="0" role="img" aria-labelledby="compare-source-label"></canvas></div>
+      </figure>
+      <figure class="compare-panel">
+        <figcaption>圖鑑圖片 <strong id="compare-name"></strong></figcaption>
+        <div class="compare-preview"><img id="compare-sprite" alt=""></div>
+      </figure>
+    </div>
+    <div class="compare-actions">
+      <div class="compare-navigation" id="compare-navigation" aria-label="切換候選">
+        <button class="secondary-button" id="compare-prev" type="button" aria-label="上一個候選">上一個</button>
+        <output id="compare-position" aria-live="polite"></output>
+        <button class="secondary-button" id="compare-next" type="button" aria-label="下一個候選">下一個</button>
+      </div>
+      <button class="primary-button" id="compare-copy" type="button">複製名稱</button>
+      <span class="visually-hidden" id="compare-feedback" role="status"></span>
+    </div>
+  </dialog>
 
   <dialog class="catalog-dialog" id="catalog-dialog" aria-labelledby="catalog-title">
     <div class="catalog-layout">

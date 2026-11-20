@@ -1127,6 +1127,49 @@ function mapleRecognitionWorker(onPrepared) {
     return { x: card.x + left, y: card.y + top, width, height };
   }
 
+  function opaqueCardBounds(screen) {
+    const { pixels, width, height } = screen;
+    if (Math.min(width, height) < 24) return null;
+    const corners = [0, width - 1, (height - 1) * width, pixels.length - 1];
+    if (corners.some(index => (pixels[index] >>> 24) < 224)) return null;
+
+    screen.lightValues ??= Uint8Array.from(pixels, luminance);
+    const distance = Math.max(1, Math.round(Math.min(width, height) / 140));
+    const sideX = Math.max(3, Math.round(width * 0.08));
+    const sideY = Math.max(3, Math.round(height * 0.08));
+    const vertical = distance * width;
+    const lights = screen.lightValues;
+    const quiet = (left, top, right, bottom) => {
+      let edges = 0;
+      let count = 0;
+      for (let y = top; y < bottom; y += distance) {
+        for (let x = left; x < right; x += distance) {
+          const position = y * width + x;
+          const twiceLight = 2 * lights[position];
+          const horizontal = Math.abs(lights[position - distance] - twiceLight + lights[position + distance]);
+          const verticalEdge = Math.abs(lights[position - vertical] - twiceLight + lights[position + vertical]);
+          edges += Number(Math.max(horizontal, verticalEdge) >= 20);
+          count += 1;
+        }
+      }
+      return count > 0 && edges / count <= 0.025;
+    };
+    let quietSides = 0;
+    if (quiet(distance, distance, width - distance, distance + sideY)) quietSides += 1;
+    if (quiet(distance, height - distance - sideY, width - distance, height - distance)) quietSides += 1;
+    if (quiet(distance, distance, distance + sideX, height - distance)) quietSides += 1;
+    if (quiet(width - distance - sideX, distance, width - distance, height - distance)) quietSides += 1;
+    return quietSides >= 2 ? { x: 0, y: 0, width, height } : null;
+  }
+
+  function coversCardFocus(pose, focus) {
+    const width = Math.min(pose.x + pose.width, focus.x + focus.width) - Math.max(pose.x, focus.x);
+    const height = Math.min(pose.y + pose.height, focus.y + focus.height) - Math.max(pose.y, focus.y);
+    if (width <= 0 || height <= 0) return false;
+    const overlap = width * height;
+    return overlap >= 0.55 * focus.width * focus.height && overlap >= 0.45 * pose.width * pose.height;
+  }
+
   function compositeTemplate(template, backdrop) {
     const samples = template.samples.map(point => {
       const alpha = (point.pixel >>> 24) / 255;
@@ -1375,6 +1418,7 @@ function mapleRecognitionWorker(onPrepared) {
     const subject = foregroundBox(screen);
     if (subject?.empty) return [];
     const candidates = [];
+    let opaqueFocus;
 
     if (subject) {
       const coverage = subject.signature.reduce((sum, cell) => sum + cell, 0) / (SIGNATURE_SIDE ** 2 * 4);
@@ -1400,13 +1444,23 @@ function mapleRecognitionWorker(onPrepared) {
       const adjusted = recognizeCard(screen, subject.box, options, limit, subject.signature);
       if (adjusted.length) return completeSubject(screen, subject, options, adjusted, limit);
       candidates.length = 0;
+    } else {
+      const opaqueCard = opaqueCardBounds(screen);
+      if (opaqueCard) {
+        if (!cardHasDetails(screen, opaqueCard)) return [];
+        opaqueFocus = cardFocusBounds(screen, opaqueCard);
+        if (opaqueFocus && opaqueFocus.width * opaqueFocus.height >= 0.10 * width * height) {
+          const card = recognizeCard(screen, opaqueCard, options, limit).filter(match => coversCardFocus(match, opaqueFocus));
+          if ((card[0]?.score ?? 0) >= 0.83) return completeSubject(screen, { box: opaqueCard }, options, card, limit);
+        }
+      }
     }
 
     // Native crops often match straight away, even when their background is busy.
     const spatial = recognizeMessage({ ...message, options: {
       ...options, single: false, rejectWeakDark: true, limit: 3, includeSubjectAlternates: limit > 1,
     } });
-    const spatialMatch = spatial[0] ?? null;
+    const spatialMatch = (opaqueFocus ? spatial.find(match => coversCardFocus(match, opaqueFocus)) : spatial[0]) ?? null;
     if ((spatialMatch?.score ?? 0) >= 0.88) {
       return completeSubject(screen, subject, options, rankSubject([spatialMatch], limit, 0.88, SCORE_FLOOR), limit);
     }
@@ -1415,6 +1469,7 @@ function mapleRecognitionWorker(onPrepared) {
       const placements = cropPlacements(screen, template);
       for (const mirrored of [false, true]) {
         for (const box of placements) {
+          if (opaqueFocus && !coversCardFocus(box, opaqueFocus)) continue;
           const score = normalizedColorScore(screen, { box, template, mirrored });
           if (score >= (limit > 1 ? 0.80 : 0.87)) candidates.push(matchFromTemplate(template, box, score, 'normalized', mirrored));
         }

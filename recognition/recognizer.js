@@ -1194,38 +1194,63 @@ function mapleRecognitionWorker(onPrepared) {
     return refineCardPlacements(screen, card, shortlist, candidateLimit, mode);
   }
 
-  function searchFocusedCard(screen, card, ranked, candidateLimit) {
+  function searchFocusedCard(screen, card, ranked, foregroundRanks, candidateLimit) {
     const focus = cardFocusBounds(screen, card);
     if (!focus) return [];
     const sizes = [[1, 1], [1.045, 1], [1, 1.045], [1.045, 1.045], [0.955, 1], [1, 0.955], [1.045, 0.955], [0.955, 1.045]];
+    const profilesByTemplate = new Map();
+    for (const { template } of ranked) {
+      const fullBounds = { x: 0, y: 0, width: template.width, height: template.height };
+      const profiles = template.probeBounds ? [fullBounds, template.probeBounds] : [fullBounds];
+      const compatible = profiles.filter(bounds => {
+        const aspect = focus.width * bounds.height / (focus.height * bounds.width);
+        return sizes.some(([x, y]) => aspect * x / y >= 0.78 && aspect * x / y <= 1.28);
+      });
+      if (compatible.length) profilesByTemplate.set(template, compatible);
+    }
+    const beforeBudget = ({ template }) => profilesByTemplate.has(template);
+    const pool = new Set([
+      ...foregroundRanks.filter(beforeBudget).slice(0, 480), ...ranked.filter(beforeBudget).slice(0, 1400),
+    ].map(({ template }) => template));
+
+    // A nearly full card can contain decorations outside the main subject's edge box.
+    const shifts = [[0, 0]];
+    if (focus.width >= card.width * 0.82) {
+      const shift = Math.round(focus.width * 0.04);
+      shifts.push([-shift, 0], [shift, 0]);
+    }
+    if (focus.height >= card.height * 0.82) {
+      const shift = Math.round(focus.height * 0.04);
+      shifts.push([0, -shift], [0, shift]);
+    }
     const shortlist = [];
     const verified = [];
-    for (const template of ranked) {
-      const fullBounds = { x: 0, y: 0, width: template.width, height: template.height };
+    for (const template of pool) {
       // A thin outline can appear in the card's edge bounds even when interior probes omit it.
-      const profiles = template.probeBounds ? [fullBounds, template.probeBounds] : [fullBounds];
       const probes = takeSpread(template.samples, 19);
-      for (const bounds of profiles) {
+      for (const bounds of profilesByTemplate.get(template)) {
         const aspect = focus.width * bounds.height / (focus.height * bounds.width);
-        if (aspect < 0.78 || aspect > 1.28) continue;
         for (const mirrored of [false, true]) {
           const bodyX = mirrored ? template.width - bounds.x - bounds.width / 2 : bounds.x + bounds.width / 2;
           const bodyY = bounds.y + bounds.height / 2;
           for (const [adjustX, adjustY] of sizes) {
+            const adjustedAspect = aspect * adjustX / adjustY;
+            if (adjustedAspect < 0.78 || adjustedAspect > 1.28) continue;
             const scaleX = focus.width * adjustX / bounds.width;
             const scaleY = focus.height * adjustY / bounds.height;
-            const box = {
-              x: Math.round(focus.x + focus.width / 2 - bodyX * scaleX),
-              y: Math.round(focus.y + focus.height / 2 - bodyY * scaleY),
-              width: Math.round(template.width * scaleX),
-              height: Math.round(template.height * scaleY),
-            };
-            const score = cardPlacementScore(screen, template, box, card, mirrored, probes, true);
-            if (score < 0.68) continue;
-            shortlist.push({ template, box, mirrored, score });
-            // A pose can be convincing on the full sample set even if it ranks lower on the coarse probes.
-            const checked = cardPlacementScore(screen, template, box, card, mirrored, template.samples, false, true);
-            if (checked >= 0.83) verified.push(matchFromTemplate(template, box, checked, 'normalized', mirrored));
+            const left = Math.round(focus.x + focus.width / 2 - bodyX * scaleX);
+            const top = Math.round(focus.y + focus.height / 2 - bodyY * scaleY);
+            const width = Math.round(template.width * scaleX);
+            const height = Math.round(template.height * scaleY);
+            for (const [dx, dy] of shifts) {
+              const box = { x: left + dx, y: top + dy, width, height };
+              const score = cardPlacementScore(screen, template, box, card, mirrored, probes, true);
+              if (score < 0.68) continue;
+              shortlist.push({ template, box, mirrored, score });
+              // A pose can be convincing on the full sample set even if it ranks lower on the coarse probes.
+              const checked = cardPlacementScore(screen, template, box, card, mirrored, template.samples, false, true);
+              if (checked >= 0.83) verified.push(matchFromTemplate(template, box, checked, 'normalized', mirrored));
+            }
           }
         }
       }
@@ -1323,8 +1348,7 @@ function mapleRecognitionWorker(onPrepared) {
     let foregroundRanks;
     if (!silhouette && (first[0]?.score ?? 0) < 0.85) {
       foregroundRanks = rankCardForeground(screen, card, ranked);
-      const pool = new Set([...foregroundRanks.slice(0, 480), ...ranked.slice(0, 1400)].map(({ template }) => template));
-      const focused = searchFocusedCard(screen, card, pool, candidateLimit);
+      const focused = searchFocusedCard(screen, card, ranked, foregroundRanks, candidateLimit);
       if ((focused[0]?.score ?? 0) >= Math.max(0.83, (first[0]?.score ?? 0) + 0.015)) first = focused;
     }
     if ((first[0]?.score ?? 0) >= 0.80 || ranked.length <= 480 || (silhouette && first.length)) return first;

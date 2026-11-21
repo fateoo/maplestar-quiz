@@ -235,6 +235,20 @@
 
   function timeOutJob(job) {
     if (job !== activeJob) return;
+    const completed = [job.primary, job.alternate].filter(lane => lane?.response?.type === 'result'
+      && lane.response.matches?.some(({ score }) => Number.isFinite(score)));
+    const [winner] = completed.sort((first, second) =>
+      compareLaneGrades(second.grade ?? gradeLane(second), first.grade ?? gradeLane(first)));
+    if (winner) {
+      let matches = winner.response.matches;
+      if (winner.grade?.supported.length) {
+        matches = winner.grade.supported;
+      } else if (winner.subject) {
+        matches = matches.map(match => ({ ...match, suggestion: true }));
+      }
+      finishJob(job, winner, matches);
+      return;
+    }
     discardJob(job, true);
     showNotice('error', '辨識逾時', '圖片辨識已超過 5 秒。請重新辨識，或裁切圖片後再試。', true);
   }
@@ -707,6 +721,10 @@
     };
   }
 
+  function compareLaneGrades(first, second) {
+    return first.quality - second.quality || Number(first.geometry) - Number(second.geometry) || first.score - second.score;
+  }
+
   function finishLane(lane, response) {
     const { job } = lane;
     if (!canRunJob(job)) return;
@@ -730,13 +748,13 @@
       const winner = alternateSupported ? job.alternate : job.primary;
       finishJob(job, winner, winner.grade.supported);
     } else {
-      const comparison = alternate.quality - primary.quality || Number(alternate.geometry) - Number(primary.geometry) || alternate.score - primary.score;
-      finishJob(job, comparison > 0 ? job.alternate : job.primary);
+      finishJob(job, compareLaneGrades(alternate, primary) > 0 ? job.alternate : job.primary);
     }
   }
 
   function finishJob(job, winner, matches = winner.response.matches) {
     releaseJob(job);
+    if (worker.lane?.job === job) retireWorker(worker);
     const alternateSlot = job.alternate?.slot;
     const spare = alternateSlot === worker ? undefined : alternateSlot;
     if (spare?.ready && !spare.closed && (worker.closed || (winner.slot === spare && winner.grade?.trusted))) {

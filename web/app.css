@@ -150,6 +150,10 @@ p, h1, h2 { margin: 0; }
   box-shadow: 0 0 0 100vmax #192c2273;
 }
 
+#capture-panel:not([hidden]) ~ .stage,
+#capture-panel:not([hidden]) ~ .crop-controls,
+#capture-panel:not([hidden]) ~ .screenshot-footer { display: none; }
+
 .stage {
   position: relative;
   display: grid;

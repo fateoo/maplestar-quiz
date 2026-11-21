@@ -1094,7 +1094,8 @@
     surface: get('capture-surface'),
     selection: get('capture-overlay'),
     status: get('capture-status'),
-    canCapture: () => !activeJob && (!currentFile || screenshotLoaded) && !dialog.open && !compareDialog.open && !draftRegion,
+    // The first captured frame replaces any draft crop on the previous screenshot.
+    canCapture: () => !activeJob && (!currentFile || screenshotLoaded) && !dialog.open && !compareDialog.open,
     onFrame: (file) => chooseFile(file, true),
     onReset: cancelCapturedRecognition,
     onStop: cancelCapturedRecognition,

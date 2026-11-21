@@ -124,7 +124,7 @@
 
     function clearRegion() {
       clearInterval(interval);
-      region = draft = drag = frameJob = lastSample = pendingSample = undefined;
+      interval = region = draft = drag = frameJob = lastSample = pendingSample = undefined;
       nextFrame = 0;
       renderSelection(null);
       frameCanvas.width = frameCanvas.height = 1;
@@ -236,7 +236,7 @@
         frameCanvas.height = Math.max(1, Math.floor(height * scale));
         frameContext.drawImage(video, x, y, width, height, 0, 0, frameCanvas.width, frameCanvas.height);
         const blob = await new Promise(resolve => frameCanvas.toBlob(resolve, 'image/png'));
-        if (frameJob !== job || !canCapture()) return;
+        if (frameJob !== job || drag || !canCapture()) return;
         if (!blob) throw new Error('無法擷取畫面');
         const accepted = await onFrame(new File([blob], '螢幕擷取.png', { type: 'image/png' }));
         if (frameJob === job && accepted !== false) {
@@ -251,7 +251,7 @@
     }
 
     function inspectFrame() {
-      if (!region || frameJob || track?.muted || video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA
+      if (!region || drag || frameJob || track?.muted || video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA
         || !video.videoWidth || !canCapture()) return;
       const bounds = captureBounds(region);
       if (bounds.width < minRegionSide || bounds.height < minRegionSide) return;
@@ -281,9 +281,13 @@
       const bounds = captureBounds(rect);
       if (bounds.width < minRegionSide || bounds.height < minRegionSide) {
         draft = undefined;
-        renderSelection(null);
-        notice('框選範圍太小，請重新框選。');
+        renderSelection(region);
+        if (!region) notice('框選範圍太小，請重新框選。');
         return false;
+      }
+      if (region) {
+        clearRegion();
+        onReset?.();
       }
       region = rect;
       draft = undefined;
@@ -315,12 +319,19 @@
       renderSelection(draft);
     }
 
+    function cancelDrag() {
+      draft = drag = undefined;
+      renderSelection(region);
+      inspectFrame();
+    }
+
     const arrows = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] };
     surface.addEventListener('pointerdown', event => {
-      if (!choosing || drag || event.button !== 0 || !video.videoWidth) return;
+      if (!stream || drag || event.button !== 0 || !video.videoWidth || !video.videoHeight) return;
       event.preventDefault();
       surface.focus({ preventScroll: true });
       drag = { id: event.pointerId, start: pointerPosition(event) };
+      pendingSample = undefined;
       if (event.isTrusted) surface.setPointerCapture?.(event.pointerId);
       updateDraft(event);
     });
@@ -331,16 +342,19 @@
       if (drag?.id !== event.pointerId) return;
       updateDraft(event);
       drag = undefined;
-      commitRegion(draft);
+      if (!commitRegion(draft)) inspectFrame();
     });
     for (const type of ['pointercancel', 'lostpointercapture']) {
       surface.addEventListener(type, event => {
-        if (drag?.id !== event.pointerId) return;
-        draft = drag = undefined;
-        renderSelection(null);
+        if (drag?.id === event.pointerId) cancelDrag();
       });
     }
     surface.addEventListener('keydown', event => {
+      if (drag && event.key === 'Escape') {
+        event.preventDefault();
+        cancelDrag();
+        return;
+      }
       if (!choosing || drag || !video.videoWidth) return;
       if (event.key === 'Escape') {
         draft = undefined;

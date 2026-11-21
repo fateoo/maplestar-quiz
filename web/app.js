@@ -58,6 +58,7 @@
   let catalogPage = 0;
   let selectedName;
   let pendingCopy;
+  let copyFeedbackButton;
   let copyFeedbackTimer;
 
   function element(tag, className, value) {
@@ -759,8 +760,11 @@
   function resetCopyFeedback() {
     pendingCopy = undefined;
     clearTimeout(copyFeedbackTimer);
-    copyButton.textContent = '複製名稱';
-    compareCopy.textContent = '複製名稱';
+    if (copyFeedbackButton) {
+      const { button, label } = copyFeedbackButton;
+      button.textContent = label;
+      copyFeedbackButton = undefined;
+    }
     candidateFeedback.textContent = '';
     get('compare-feedback').textContent = '';
   }
@@ -819,8 +823,7 @@
     resetCopyFeedback();
   });
 
-  function renderCandidate(result, index) {
-    const match = loadEntry(result);
+  function renderCandidate(match, index, shownNames) {
     const name = element('strong', 'entity-name', mainName(match));
     const option = element('input', 'candidate-option visually-hidden');
     option.type = 'radio';
@@ -840,8 +843,27 @@
 
     const choice = element('span', 'candidate-choice');
     choice.append(marker, sprite(match), name, meta);
-    const row = element('label', 'candidate-row');
-    row.append(option, choice);
+    const label = element('label', 'candidate-label');
+    label.append(option, choice);
+    const row = element('div', 'candidate-row');
+    row.append(label);
+
+    const aliases = element('ul', 'candidate-aliases');
+    aliases.setAttribute('aria-label', '同圖名稱');
+    for (const alias of match.aliases ?? []) {
+      const key = catalogSearchKey(alias);
+      if (!key || shownNames.has(key)) continue;
+      shownNames.add(key);
+      const aliasName = element('span', 'candidate-alias-name', alias);
+      const copy = element('button', 'secondary-button candidate-alias-copy', '複製');
+      copy.type = 'button';
+      copy.setAttribute('aria-label', `複製 ${alias}`);
+      copy.addEventListener('click', () => copyName(aliasName, copy, candidateFeedback));
+      const item = element('li', 'candidate-alias');
+      item.append(aliasName, copy);
+      aliases.append(item);
+    }
+    if (aliases.childElementCount) row.append(aliases);
     return row;
   }
 
@@ -854,10 +876,11 @@
 
     const preferred = candidates.filter(({ score, suggestion }) => !suggestion && score >= preferredCandidateScore);
     const reviewing = preferred.length === 0;
-    const visibleMatches = reviewing ? candidates : preferred;
+    const visibleMatches = (reviewing ? candidates : preferred).slice(0, candidateLimit).map(loadEntry);
     const note = get('candidate-note');
     note.hidden = !reviewing;
-    candidateList.replaceChildren(...visibleMatches.slice(0, candidateLimit).map(renderCandidate));
+    const shownNames = new Set(visibleMatches.map(match => catalogSearchKey(mainName(match))));
+    candidateList.replaceChildren(...visibleMatches.map((match, index) => renderCandidate(match, index, shownNames)));
     selectCandidate(candidateList.querySelector('.entity-name'));
     const elapsedNode = get('elapsed');
     elapsedNode.textContent = elapsed >= 1000 ? `耗時 ${(elapsed / 1000).toFixed(1)} 秒` : `耗時 ${Math.round(elapsed)} 毫秒`;
@@ -866,27 +889,24 @@
     elapsedNode.hidden = false;
     resultCard.hidden = false;
     const reviewMessage = reviewing ? `${note.textContent} ` : '';
-    candidateFeedback.textContent = `${reviewMessage}找到 ${candidateList.childElementCount} 個候選名稱，已選取 ${selectedName.textContent}。`;
+    candidateFeedback.textContent = `${reviewMessage}找到 ${candidateList.childElementCount} 個候選項目，已選取 ${selectedName.textContent}。`;
   }
 
-  async function copySelectedName(event) {
-    const button = event.currentTarget;
-    const comparing = button === compareCopy;
-    const name = comparing ? compareName : selectedName;
+  async function copyName(name, button, feedback) {
     if (!name) return;
-    clearTimeout(copyFeedbackTimer);
+    resetCopyFeedback();
     const attempt = {};
     pendingCopy = attempt;
     const copied = await copyResultName(name, attempt);
     if (pendingCopy !== attempt) return;
+    copyFeedbackButton = { button, label: button.textContent };
     button.textContent = copied ? '已複製' : '請手動複製';
-    const feedback = comparing ? get('compare-feedback') : candidateFeedback;
     feedback.textContent = copied ? `已複製 ${name.textContent}` : '名稱已選取，可手動複製。';
     copyFeedbackTimer = setTimeout(resetCopyFeedback, 2000);
   }
 
-  copyButton.addEventListener('click', copySelectedName);
-  compareCopy.addEventListener('click', copySelectedName);
+  copyButton.addEventListener('click', () => copyName(selectedName, copyButton, candidateFeedback));
+  compareCopy.addEventListener('click', () => copyName(compareName, compareCopy, get('compare-feedback')));
 
   function catalogSearchKey(value) {
     return String(value).normalize('NFKC').toLowerCase().replace(/[^\p{L}\p{M}\p{N}]+/gu, '');

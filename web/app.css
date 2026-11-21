@@ -219,9 +219,9 @@ kbd { font: 600 .78rem system-ui, sans-serif; background: white; border: 1px sol
 
 .candidate-list { display: grid; gap: .28rem; }
 .candidate-note { margin: 0 0 .4rem; padding: .4rem .6rem; border-radius: .45rem; color: #803719; background: var(--orange-soft); font-size: .87rem; }
-.candidate-row { position: relative; display: block; cursor: pointer; }
+.candidate-row { --candidate-image-size: 4.25rem; position: relative; min-width: 0; }
+.candidate-label { display: block; cursor: pointer; }
 .candidate-choice {
-  --candidate-image-size: 4.25rem;
   display: grid;
   grid-template-columns: 1rem var(--candidate-image-size) minmax(0, 1fr) auto;
   align-items: center;
@@ -237,6 +237,11 @@ kbd { font: 600 .78rem system-ui, sans-serif; background: white; border: 1px sol
 .candidate-option:checked + .candidate-choice .candidate-marker { border-color: var(--green); }
 .candidate-option:checked + .candidate-choice .candidate-marker::after { content: ""; width: .48rem; height: .48rem; border-radius: 50%; background: var(--green); }
 .candidate-meta { display: grid; justify-items: end; gap: .17rem; }
+.candidate-aliases { display: flex; flex-wrap: wrap; gap: .3rem; max-height: 9rem; overflow-y: auto; list-style: none; margin: .08rem .6rem .3rem calc(var(--candidate-image-size) + 2.9rem); padding: 0; }
+.candidate-alias { display: flex; align-items: center; gap: .32rem; max-width: 100%; padding: .12rem .15rem .12rem .45rem; border: 1px solid var(--line); border-radius: .45rem; }
+.candidate-alias-name { min-width: 0; font-size: .86rem; overflow-wrap: anywhere; }
+.candidate-alias-copy { flex: none; min-height: 1.8rem; padding: .15rem .38rem; background: var(--green-soft); border-color: transparent; font-size: .78rem; }
+.candidate-alias-copy:hover { border-color: #b0ceaf; }
 
 .sprite { display: grid; grid-template: minmax(0, 1fr) / minmax(0, 1fr); place-items: center; width: 2.7rem; height: 2.7rem; overflow: hidden; border: 1px solid #dce7da; border-radius: .48rem; background: #f1f5ed; }
 .sprite img { max-width: 88%; max-height: 88%; object-fit: contain; image-rendering: pixelated; }
@@ -322,7 +327,7 @@ kbd { font: 600 .78rem system-ui, sans-serif; background: white; border: 1px sol
   .screenshot-actions .text-button { padding-inline: .32rem; }
   .results-panel { min-height: 0; }
   .results-notice { min-height: 12rem; }
-  .candidate-choice { --candidate-image-size: 3.8rem; }
+  .candidate-row { --candidate-image-size: 3.8rem; }
   .compare-dialog { width: calc(100% - 1rem); }
   .compare-grid { gap: .5rem; padding: .65rem .65rem .75rem; }
   .compare-preview { height: clamp(8rem, 55vh, 82vw); height: clamp(8rem, 55dvh, 82vw); padding: .3rem; }

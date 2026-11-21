@@ -17,6 +17,7 @@ function mapleRecognitionWorker(onPrepared) {
   let translucentTemplates = [];
   let logicalTemplateCount = 0;
   const matchGeometry = new WeakMap();
+  const cardRankCache = new WeakMap();
   let exactColors = new Map();
 
   function byteArray(rgba) {
@@ -985,7 +986,26 @@ function mapleRecognitionWorker(onPrepared) {
     return 0.88 * colorScore + 0.12 * correct / checked;
   }
 
+  function cardRankings(screen, card) {
+    // Recovery passes reuse the same pixels. Adjusted or resampled images get a new pixel view.
+    let regions = cardRankCache.get(screen.pixels);
+    if (!regions) {
+      regions = new Map();
+      cardRankCache.set(screen.pixels, regions);
+    }
+    const key = `${screen.width},${card.x},${card.y},${card.width},${card.height}`;
+    let rankings = regions.get(key);
+    if (!rankings) {
+      rankings = { palette: new Map(), foreground: new WeakMap() };
+      regions.set(key, rankings);
+    }
+    return rankings;
+  }
+
   function rankCardTemplates(screen, card, options, silhouette, pool = templates) {
+    const cache = !silhouette && pool === templates ? cardRankings(screen, card).palette : null;
+    const cached = cache?.get(options.entityType);
+    if (cached) return cached;
     const histogram = new Uint32Array(JPEG_BUCKET_COUNT);
     for (let y = card.y; y < card.y + card.height; y += 1) {
       for (let x = card.x; x < card.x + card.width; x += 1) {
@@ -1014,10 +1034,15 @@ function mapleRecognitionWorker(onPrepared) {
       support /= palette.length;
       if (support >= 0.51) ranks.push({ template, score: support + 1.25 * shape });
     }
-    return ranks.sort((a, b) => b.score - a.score);
+    ranks.sort((a, b) => b.score - a.score);
+    cache?.set(options.entityType, ranks);
+    return ranks;
   }
 
   function rankCardForeground(screen, card, ranked) {
+    const cache = cardRankings(screen, card).foreground;
+    const cached = cache.get(ranked);
+    if (cached) return cached;
     const insetX = Math.max(1, Math.round(card.width * 0.15));
     const insetY = Math.max(1, Math.round(card.height * 0.09));
     const centerWidth = card.width - 2 * insetX;
@@ -1038,7 +1063,7 @@ function mapleRecognitionWorker(onPrepared) {
     // Favor colors concentrated around the character over colors repeated around the card border.
     const evidence = Float32Array.from(center, (count, key) => Math.max(0, count - edges[key] * centerArea / edgeArea));
     const strengths = Float32Array.from(evidence, count => Math.min(1, Math.log2(1 + count) / 6));
-    return ranked.map(({ template }) => {
+    const foreground = ranked.map(({ template }) => {
       const palette = takeSpread(template.samples, 26);
       let support = 0;
       for (const point of palette) {
@@ -1052,6 +1077,8 @@ function mapleRecognitionWorker(onPrepared) {
       }
       return { template, score: support / palette.length };
     }).sort((a, b) => b.score - a.score);
+    cache.set(ranked, foreground);
+    return foreground;
   }
 
   function cardBackdrop(screen, card) {

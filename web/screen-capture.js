@@ -52,12 +52,21 @@
     return '無法開啟分享畫面，請重新選擇來源。';
   }
 
+  function captureWindowKey(track, sourceSurface) {
+    if (sourceSurface !== 'window') return null;
+    // Chromium exposes a native ID for some window sources. A label with
+    // a trailing :s is a picker session ID, which changes between shares.
+    const match = /^window:(-?[1-9]\d{0,18}):(-?(?:0|[1-9]\d{0,18}))$/.exec(track.label);
+    return match && match[1] !== '-3' && match[1] !== '-1' ? match[0] : null;
+  }
+
   window.createMapleScreenCapture = function ({
-    startButton, stopButton, reselectButton, panel, video, surface, selection, status,
+    startButton, stopButton, reselectButton, useLastButton, panel, video, surface, selection, status,
     canCapture = () => true, onFrame, onReset, onStop,
   }) {
     const devices = navigator.mediaDevices;
     const supported = typeof devices?.getDisplayMedia === 'function';
+    const savedRegions = window.mapleCaptureRegions;
     const sampleCanvas = document.createElement('canvas');
     sampleCanvas.width = sampleSide;
     sampleCanvas.height = sampleSide;
@@ -68,6 +77,8 @@
     let requesting = false;
     let stream;
     let track;
+    let sourceSurface;
+    let windowKey = null;
     let sourceWidth = 0;
     let sourceHeight = 0;
     let choosing = false;
@@ -86,10 +97,18 @@
       if (status.textContent !== message) status.textContent = message;
     }
 
+    function canRememberRegion() {
+      return !sourceSurface || sourceSurface === 'window';
+    }
+
     function renderControls() {
       startButton.disabled = !supported || requesting || !!stream;
       stopButton.disabled = !requesting && !stream;
       reselectButton.disabled = !stream || !video.videoWidth;
+      if (useLastButton) {
+        useLastButton.disabled = !stream || !choosing || !video.videoWidth
+          || !canRememberRegion() || !savedRegions?.loadLast(windowKey);
+      }
       panel.hidden = !stream;
       surface.toggleAttribute('data-selecting', choosing);
     }
@@ -117,6 +136,8 @@
       const previous = stream;
       requesting = choosing = false;
       stream = track = undefined;
+      sourceSurface = undefined;
+      windowKey = null;
       sourceWidth = sourceHeight = 0;
       clearRegion();
       video.pause();
@@ -130,6 +151,7 @@
 
     function drawPreview() {
       if (!stream || !video.videoWidth || !video.videoHeight) return;
+      const firstPreview = !sourceWidth;
       const resized = sourceWidth !== video.videoWidth || sourceHeight !== video.videoHeight;
       sourceWidth = video.videoWidth;
       sourceHeight = video.videoHeight;
@@ -138,8 +160,10 @@
         chooseAgain(false);
         return;
       }
+      const remembered = firstPreview && savedRegions?.load(windowKey, sourceWidth, sourceHeight);
+      if (remembered && commitRegion(remembered, { restored: true, persist: false })) return;
       renderControls();
-      if (choosing) notice('請在預覽畫面框選要辨識的區域。');
+      if (choosing) notice(useLastButton?.disabled === false ? '請框選範圍，或套用上次範圍。' : '請在預覽畫面框選要辨識的區域。');
     }
 
     async function start() {
@@ -160,6 +184,8 @@
           stop('分享來源已關閉，請重新選擇。');
           return;
         }
+        sourceSurface = track.getSettings?.()?.displaySurface;
+        windowKey = captureWindowKey(track, sourceSurface);
         requesting = false;
         choosing = true;
         track.addEventListener('ended', () => {
@@ -251,22 +277,24 @@
       }
     }
 
-    function commitRegion(rect) {
+    function commitRegion(rect, { restored = false, persist = true } = {}) {
       const bounds = captureBounds(rect);
       if (bounds.width < minRegionSide || bounds.height < minRegionSide) {
         draft = undefined;
         renderSelection(null);
         notice('框選範圍太小，請重新框選。');
-        return;
+        return false;
       }
       region = rect;
       draft = undefined;
       choosing = false;
+      if (persist && canRememberRegion()) savedRegions?.save(windowKey, video.videoWidth, video.videoHeight, rect);
       renderControls();
       renderSelection(region);
-      notice('自動辨識已啟用，畫面變動時會更新結果。');
+      notice(restored ? '已套用上次範圍，正在自動辨識。' : '自動辨識已啟用，畫面變動時會更新結果。');
       interval = setInterval(inspectFrame, sampleInterval);
       inspectFrame();
+      return true;
     }
 
     function pointerPosition(event) {
@@ -341,6 +369,11 @@
     startButton.addEventListener('click', start);
     stopButton.addEventListener('click', () => stop());
     reselectButton.addEventListener('click', () => chooseAgain());
+    useLastButton?.addEventListener('click', () => {
+      if (useLastButton.disabled || drag) return;
+      const remembered = savedRegions?.loadLast(windowKey);
+      if (remembered) commitRegion(remembered, { restored: true });
+    });
     video.addEventListener('loadedmetadata', drawPreview);
     video.addEventListener('resize', drawPreview);
     window.addEventListener('pagehide', () => stop());

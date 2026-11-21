@@ -1088,6 +1088,7 @@
     startButton: get('capture-start'),
     stopButton: get('capture-stop'),
     reselectButton: get('capture-select'),
+    useLastButton: get('capture-use-last'),
     panel: get('capture-panel'),
     video: get('capture-video'),
     surface: get('capture-surface'),

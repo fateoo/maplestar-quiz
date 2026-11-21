@@ -99,7 +99,7 @@ p, h1, h2 { margin: 0; }
 
 .capture-toolbar, .capture-actions { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem .55rem; }
 .capture-toolbar { margin: 0 1.2rem .75rem; }
-#capture-select:disabled, #capture-stop:disabled { display: none; }
+#capture-select:disabled, #capture-use-last:disabled, #capture-stop:disabled { display: none; }
 .capture-status { flex: 1 1 11rem; color: var(--muted); font-size: .85rem; line-height: 1.5; overflow-wrap: anywhere; }
 .capture-status:empty { position: absolute; }
 .capture-panel { display: grid; gap: .4rem; margin: 0 1.2rem .75rem; }

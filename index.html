@@ -6,7 +6,7 @@
   <meta name="theme-color" content="#f5f7f0">
   <title>腦力全開！快問快答｜涼圓 出品</title>
   <meta name="description" content="從角色圖片辨識單一 MapleStar 怪物或 NPC 的名稱。">
-  <link rel="stylesheet" href="web/app.css?v=0.0.23">
+  <link rel="stylesheet" href="web/app.css?v=0.0.24">
 </head>
 <body>
   <header class="site-header">
@@ -53,6 +53,7 @@
           <div class="capture-actions" role="group" aria-label="畫面擷取">
             <button class="secondary-button" type="button" id="capture-start" aria-controls="capture-panel">分享畫面</button>
             <button class="secondary-button" type="button" id="capture-select" aria-controls="capture-panel" disabled>重選範圍</button>
+            <button class="secondary-button" type="button" id="capture-use-last" aria-controls="capture-panel" disabled>套用上次範圍</button>
             <button class="text-button" type="button" id="capture-stop" aria-controls="capture-panel" disabled>停止分享</button>
           </div>
           <p class="capture-status" id="capture-status" role="status" aria-atomic="true"></p>
@@ -136,8 +137,8 @@
       <span data-desktop-only hidden>圖片只在本機處理</span>
       <span id="catalog-version" hidden></span>
       <div class="release-details">
-        <span id="release-version">網頁版本 v0.0.23</span>
-        <span>發佈時間 <time id="release-time" datetime="2026-11-22T00:28:34+08:00">2026-11-22 00:28:34</time>（UTC+8）</span>
+        <span id="release-version">網頁版本 v0.0.24</span>
+        <span>發佈時間 <time id="release-time" datetime="2026-11-22T00:40:28+08:00">2026-11-22 00:40:28</time>（UTC+8）</span>
       </div>
     </footer>
   </main>
@@ -198,8 +199,9 @@
     <script src="recognition/read-index.js"></script>
     <script src="recognition/recognizer.js?v=0.0.22"></script>
     <script src="recognition/locate-card.js?v=0.0.12"></script>
-    <script src="web/screen-capture.js?v=0.0.23"></script>
-    <script src="web/app.js?v=0.0.23"></script>
+    <script src="web/capture-regions.js?v=0.0.24"></script>
+    <script src="web/screen-capture.js?v=0.0.24"></script>
+    <script src="web/app.js?v=0.0.24"></script>
   </template>
   <script>
     (() => {

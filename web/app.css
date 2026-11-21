@@ -67,9 +67,22 @@ p, h1, h2 { margin: 0; }
 .catalog-details { padding-left: .7rem; border-left: 1px solid var(--line); font-size: .82rem; white-space: nowrap; }
 
 .main-content { padding-top: clamp(2.35rem, 5.5vw, 4.65rem); }
-.page-intro { margin-bottom: 2.05rem; }
+.page-intro { margin-bottom: 1.15rem; }
 .page-intro h1 { font-size: clamp(2.25rem, 4vw, 3.375rem); font-weight: 790; line-height: 1.08; letter-spacing: -.04em; }
 .page-intro p { margin-top: .85rem; font-size: 1rem; color: var(--muted); line-height: 1.65; }
+
+.usage-guide {
+  margin-bottom: 1.1rem;
+  padding: .85rem 1.15rem .95rem;
+  border: 1px solid var(--line);
+  border-radius: .85rem;
+  background: #eef3ea;
+}
+.usage-guide h2 { font-size: .8rem; font-weight: 700; color: var(--muted); }
+.usage-methods { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 24rem), 1fr)); gap: .75rem 1.35rem; margin-top: .45rem; }
+.usage-methods h3 { margin: 0 0 .2rem; font-size: .93rem; font-weight: 720; }
+.usage-methods p { color: var(--muted); font-size: .85rem; line-height: 1.55; }
+.usage-methods p + p { margin-top: .25rem; }
 
 .workbench { display: grid; grid-template-columns: minmax(0, 1fr) minmax(18.5rem, .46fr); align-items: start; gap: 1.1rem; }
 .panel, .catalog-dialog, .compare-dialog { background: var(--panel); border-radius: 1.12rem; border: 1px solid var(--line); box-shadow: 0 5px 18px #243e2510; }

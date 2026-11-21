@@ -6,7 +6,7 @@
   <meta name="theme-color" content="#f5f7f0">
   <title>腦力全開！快問快答｜涼圓 出品</title>
   <meta name="description" content="從角色圖片辨識單一 MapleStar 怪物或 NPC 的名稱。">
-  <link rel="stylesheet" href="web/app.css?v=0.0.24">
+  <link rel="stylesheet" href="web/app.css?v=0.0.25">
 </head>
 <body>
   <header class="site-header">
@@ -37,6 +37,22 @@
       <h1>圖片辨識</h1>
       <p>請貼上或擷取單一怪物或 NPC 的畫面，保留完整輪廓，並盡量減少四周留白。</p>
     </div>
+
+    <section class="usage-guide" aria-labelledby="usage-title" data-desktop-only hidden>
+      <h2 id="usage-title">使用說明</h2>
+      <div class="usage-methods">
+        <div>
+          <h3>分享畫面</h3>
+          <p>點「分享畫面」，選擇遊戲視窗並確認分享，再在預覽中拖曳框選角色。框內畫面變動時會自動辨識。</p>
+          <p>重新分享時可沿用上次範圍。結束時按「停止分享」。</p>
+        </div>
+        <div>
+          <h3>上傳截圖</h3>
+          <p>點「選擇圖片」或將截圖拖進辨識區。也可以先複製截圖，再按 Windows 的 <kbd>Ctrl + V</kbd> 或 Mac 的 <kbd>⌘ + V</kbd> 貼上。</p>
+          <p>圖片載入後會自動辨識。若找到多個範圍，點選要辨識的那一個。</p>
+        </div>
+      </div>
+    </section>
 
     <div class="workbench" data-desktop-only hidden>
       <section class="panel screenshot-panel" aria-labelledby="screenshot-title">
@@ -137,8 +153,8 @@
       <span data-desktop-only hidden>圖片只在本機處理</span>
       <span id="catalog-version" hidden></span>
       <div class="release-details">
-        <span id="release-version">網頁版本 v0.0.24</span>
-        <span>發佈時間 <time id="release-time" datetime="2026-11-22T00:40:28+08:00">2026-11-22 00:40:28</time>（UTC+8）</span>
+        <span id="release-version">網頁版本 v0.0.25</span>
+        <span>發佈時間 <time id="release-time" datetime="2026-11-22T00:56:01+08:00">2026-11-22 00:56:01</time>（UTC+8）</span>
       </div>
     </footer>
   </main>

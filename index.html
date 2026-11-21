@@ -6,7 +6,7 @@
   <meta name="theme-color" content="#f5f7f0">
   <title>腦力全開！快問快答｜涼圓 出品</title>
   <meta name="description" content="從角色圖片辨識單一 MapleStar 怪物或 NPC 的名稱。">
-  <link rel="stylesheet" href="web/app.css?v=0.0.16">
+  <link rel="stylesheet" href="web/app.css?v=0.0.23">
 </head>
 <body>
   <header class="site-header">
@@ -35,7 +35,7 @@
 
     <div class="page-intro" data-desktop-only hidden>
       <h1>圖片辨識</h1>
-      <p>請貼上單一怪物或 NPC 的截圖，保留完整輪廓，並盡量減少四周留白。</p>
+      <p>請貼上或擷取單一怪物或 NPC 的畫面，保留完整輪廓，並盡量減少四周留白。</p>
     </div>
 
     <div class="workbench" data-desktop-only hidden>
@@ -46,6 +46,26 @@
             <button class="text-button" type="button" id="replace-file">更換圖片</button>
             <button class="text-button" type="button" id="replace-paste">貼上圖片</button>
             <button class="text-button" type="button" id="clear-file">清除</button>
+          </div>
+        </div>
+
+        <div class="capture-toolbar">
+          <div class="capture-actions" role="group" aria-label="畫面擷取">
+            <button class="secondary-button" type="button" id="capture-start" aria-controls="capture-panel">分享畫面</button>
+            <button class="secondary-button" type="button" id="capture-select" aria-controls="capture-panel" disabled>重選範圍</button>
+            <button class="text-button" type="button" id="capture-stop" aria-controls="capture-panel" disabled>停止分享</button>
+          </div>
+          <p class="capture-status" id="capture-status" role="status" aria-atomic="true"></p>
+        </div>
+        <div class="capture-panel" id="capture-panel" hidden>
+          <p class="crop-message" id="capture-help">在瀏覽器選擇視窗或螢幕後，拖曳框選辨識範圍。</p>
+          <p class="visually-hidden" id="capture-keyboard-help">用方向鍵移動範圍，Shift 加方向鍵調整大小，按 Enter 確認，按 Escape 清除框選。</p>
+          <div class="capture-viewport">
+            <div class="capture-surface" id="capture-surface" tabindex="0" role="group"
+              aria-label="分享畫面預覽" aria-describedby="capture-help capture-keyboard-help">
+              <video id="capture-video" autoplay muted playsinline></video>
+              <div class="capture-overlay" id="capture-overlay" aria-hidden="true" hidden></div>
+            </div>
           </div>
         </div>
 
@@ -116,8 +136,8 @@
       <span data-desktop-only hidden>圖片只在本機處理</span>
       <span id="catalog-version" hidden></span>
       <div class="release-details">
-        <span id="release-version">網頁版本 v0.0.22</span>
-        <span>發佈時間 <time id="release-time" datetime="2026-11-21T12:36:53+08:00">2026-11-21 12:36:53</time>（UTC+8）</span>
+        <span id="release-version">網頁版本 v0.0.23</span>
+        <span>發佈時間 <time id="release-time" datetime="2026-11-22T00:28:34+08:00">2026-11-22 00:28:34</time>（UTC+8）</span>
       </div>
     </footer>
   </main>
@@ -178,7 +198,8 @@
     <script src="recognition/read-index.js"></script>
     <script src="recognition/recognizer.js?v=0.0.22"></script>
     <script src="recognition/locate-card.js?v=0.0.12"></script>
-    <script src="web/app.js?v=0.0.19"></script>
+    <script src="web/screen-capture.js?v=0.0.23"></script>
+    <script src="web/app.js?v=0.0.23"></script>
   </template>
   <script>
     (() => {

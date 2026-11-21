@@ -97,6 +97,44 @@ p, h1, h2 { margin: 0; }
 .secondary-button:not(:disabled):hover, .text-button:hover { background: var(--green-soft); }
 .text-button { background: transparent; color: var(--green); }
 
+.capture-toolbar, .capture-actions { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem .55rem; }
+.capture-toolbar { margin: 0 1.2rem .75rem; }
+#capture-select:disabled, #capture-stop:disabled { display: none; }
+.capture-status { flex: 1 1 11rem; color: var(--muted); font-size: .85rem; line-height: 1.5; overflow-wrap: anywhere; }
+.capture-status:empty { position: absolute; }
+.capture-panel { display: grid; gap: .4rem; margin: 0 1.2rem .75rem; }
+.capture-viewport {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  justify-items: center;
+  max-height: min(56vh, 32rem);
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: .76rem;
+  padding: .45rem;
+  background: #edf2eb;
+}
+.capture-surface {
+  position: relative;
+  width: min(100%, calc(var(--capture-ratio, 1.7778) * min(52vh, 30rem)));
+  overflow: hidden;
+  border-radius: .42rem;
+  cursor: crosshair;
+  touch-action: none;
+  user-select: none;
+  background: #202f23;
+}
+.capture-surface:focus-visible { outline: 3px solid #a84923; outline-offset: 2px; }
+.capture-surface video { display: block; width: 100%; height: auto; }
+.capture-overlay {
+  position: absolute;
+  pointer-events: none;
+  border: 2px solid #fff;
+  outline: 1px solid #325746;
+  outline-offset: -2px;
+  box-shadow: 0 0 0 100vmax #192c2273;
+}
+
 .stage {
   position: relative;
   display: grid;

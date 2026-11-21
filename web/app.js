@@ -44,6 +44,7 @@
   let workerIssue = '';
   let screenshotUrl;
   let currentFile;
+  let capturedScreenshot = false;
   let requestId = 0;
   let workerRequestId = 0;
   let activeJob;
@@ -291,6 +292,7 @@
     invalidateRecognition();
     screenshotLoaded = false;
     currentFile = undefined;
+    capturedScreenshot = false;
     if (screenshotUrl) URL.revokeObjectURL(screenshotUrl);
     screenshotUrl = undefined;
     screenshot.removeAttribute('src');
@@ -311,31 +313,33 @@
     showNotice('empty', '等待圖片', '貼上或選擇圖片後會自動辨識。');
   }
 
-  async function chooseFile(file) {
-    if (!file) return;
+  async function chooseFile(file, captured = false) {
+    if (!file) return false;
     if (!types.has(file.type) && !/\.(png|jpe?g|webp)$/i.test(file.name)) {
       showFileError('請選擇 PNG、JPG 或 WebP 圖片。');
-      return;
+      return false;
     }
     if (file.size > maxFileSize) {
       showFileError('圖片超過 20 MB。請壓縮或裁切後再試。');
-      return;
+      return false;
     }
 
+    if (!captured) screenCapture?.stop();
     clearScreenshot();
     currentFile = file;
+    capturedScreenshot = captured;
     screenshotUrl = URL.createObjectURL(file);
     screenshot.src = screenshotUrl;
     const loadingId = requestId;
     try {
       await screenshot.decode();
     } catch {
-      if (loadingId !== requestId) return;
+      if (loadingId !== requestId) return false;
       clearScreenshot();
       showFileError('無法開啟這張圖片。請確認檔案後重試。');
-      return;
+      return false;
     }
-    if (loadingId !== requestId) return;
+    if (loadingId !== requestId) return false;
 
     screenshotLoaded = true;
     const { naturalWidth, naturalHeight } = screenshot;
@@ -347,7 +351,13 @@
     get('drop-content').hidden = true;
     get('screenshot-actions').hidden = false;
     get('file-details').textContent = `${file.name || '剪貼簿圖片'} · ${naturalWidth} × ${naturalHeight}`;
-    proposedRegions = detectRegions();
+    const regions = detectRegions();
+    if (captured) {
+      const selected = regions.length === 1 ? regions[0] : null;
+      selectCrop(selected, selected?.kind === 'sprite');
+      return true;
+    }
+    proposedRegions = regions;
     cropChoices.replaceChildren(...proposedRegions.map((region, index) => {
       const button = element('button', 'secondary-button crop-choice', `範圍 ${index + 1}`);
       button.type = 'button';
@@ -996,6 +1006,7 @@
   get('select-file').addEventListener('click', () => fileInput.click());
   get('replace-file').addEventListener('click', () => fileInput.click());
   get('clear-file').addEventListener('click', () => {
+    screenCapture?.stop();
     clearScreenshot();
     get('paste-file').focus();
   });
@@ -1062,6 +1073,31 @@
   get('catalog-type').addEventListener('change', changeCatalogFilter);
   get('catalog-prev').addEventListener('click', () => { catalogPage -= 1; renderCatalog(); });
   get('catalog-next').addEventListener('click', () => { catalogPage += 1; renderCatalog(); });
+
+  function cancelCapturedRecognition() {
+    if (!capturedScreenshot) return;
+    if (!screenshotLoaded) {
+      clearScreenshot();
+    } else if (activeJob) {
+      invalidateRecognition();
+      showNotice('empty', '已停止自動辨識', '可以重新辨識目前的圖片，或框選新的區域。', true);
+    }
+  }
+
+  const screenCapture = window.createMapleScreenCapture?.({
+    startButton: get('capture-start'),
+    stopButton: get('capture-stop'),
+    reselectButton: get('capture-select'),
+    panel: get('capture-panel'),
+    video: get('capture-video'),
+    surface: get('capture-surface'),
+    selection: get('capture-overlay'),
+    status: get('capture-status'),
+    canCapture: () => !activeJob && (!currentFile || screenshotLoaded) && !dialog.open && !compareDialog.open && !draftRegion,
+    onFrame: (file) => chooseFile(file, true),
+    onReset: cancelCapturedRecognition,
+    onStop: cancelCapturedRecognition,
+  });
 
   startWorker();
 })();

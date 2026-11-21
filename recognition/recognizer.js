@@ -1946,6 +1946,23 @@ function mapleRecognitionWorker(onPrepared) {
     return [];
   }
 
+  function recoverCardSpatialPatch(screen, card, match, options, limit) {
+    const cardArea = card.width * card.height;
+    if (cardArea > 200_000 || match.width * match.height > 0.12 * cardArea
+      || !hasOpaqueCardInterior(screen, card)) return [];
+
+    // A tight crop can lose the card border while a small, bright patch still matches.
+    screen.lightValues ??= Uint8Array.from(screen.pixels, luminance);
+    const focus = cardFocusBounds(screen, card);
+    if (!focus || focus.width * focus.height < 0.60 * cardArea) return [];
+    const ink = dominantDarkCardFocus(screen, card, true);
+    if (!ink || !coversCardFocus(ink, focus, 0.60, 0.85) || coversCardFocus(match, ink, 0.35)) return [];
+
+    const panel = recognizeCardPanel(screen, card, options, limit, true)
+      .filter(candidate => coversCardFocus(candidate, focus, 0.72, 0.75) && coversCardFocus(candidate, ink, 0.75, 0.60));
+    return (panel[0]?.score ?? 0) >= 0.85 ? panel : [];
+  }
+
   function recognizeSingle(message) {
     const { rgba, width, height, options } = message;
     const limit = Number.isInteger(options.limit) ? Math.max(1, Math.min(SUBJECT_CANDIDATE_LIMIT, options.limit)) : 1;
@@ -2055,6 +2072,10 @@ function mapleRecognitionWorker(onPrepared) {
     } });
     const spatialMatch = (opaqueFocus ? spatial.find(match => coversCardFocus(match, opaqueFocus)) : spatial[0]) ?? null;
     if ((spatialMatch?.score ?? 0) >= 0.88) {
+      if (region && !subject && !opaqueFocus && !bounded) {
+        const panel = recoverCardSpatialPatch(screen, region, spatialMatch, options, limit);
+        if (panel.length) return completeSubject(screen, { box: region }, options, panel, limit);
+      }
       const recovered = recoverCardMatch(screen, region, options, limit, [spatialMatch], subjectFocus);
       if (recovered.length) return recovered;
       return completeSubject(screen, subject, options, rankSubject([spatialMatch], limit, 0.88, SCORE_FLOOR), limit);

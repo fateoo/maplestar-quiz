@@ -1453,6 +1453,15 @@ function mapleRecognitionWorker(onPrepared) {
   }
 
   function searchCardPlacements(screen, card, ranked, candidateLimit, mode = 'wide') {
+    if (!ranked.length) return [];
+    const rankings = cardRankings(screen, card);
+    const failedPlacements = rankings.failedPlacements ??= new Map();
+    const searchKey = `${screen.approximate},${mode},${candidateLimit},${ranked.length}`;
+    const previousFailures = failedPlacements.get(searchKey);
+    // Only remember empty searches. Successful matches can be refined by callers.
+    if (previousFailures?.some(previous => ranked.every(({ template }, index) => previous[index].template === template))) {
+      return [];
+    }
     const useProbeBounds = mode === 'probes';
     const fills = useProbeBounds ? [0.60, 0.66, 0.72, 0.76, 0.82, 0.90, 0.95, 1, 1.07]
       : mode === 'center' ? [0.76, 0.80, 0.84, 0.88, 0.91, 0.94, 0.98, 1.01] : [0.72, 0.82, 0.9, 0.95, 1, 1.07];
@@ -1488,7 +1497,12 @@ function mapleRecognitionWorker(onPrepared) {
         shortlist.push(...poses.slice(0, 4));
       }
     }
-    return refineCardPlacements(screen, card, shortlist, candidateLimit, mode);
+    const matches = refineCardPlacements(screen, card, shortlist, candidateLimit, mode);
+    if (!matches.length) {
+      if (previousFailures) previousFailures.push(ranked);
+      else failedPlacements.set(searchKey, [ranked]);
+    }
+    return matches;
   }
 
   function clippedCardSides(card, focus) {

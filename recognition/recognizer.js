@@ -8,6 +8,8 @@ function mapleRecognitionWorker(onPrepared) {
   const MAX_LEAD_POSITIONS = 16_000;
   const MAX_JPEG_LEAD_POSITIONS = 2_400;
   const SCORE_FLOOR = 0.80;
+  const CARD_FOCUS_COVERAGE = 0.55;
+  const CARD_POSE_COVERAGE = 0.45;
   const SUBJECT_CANDIDATE_LIMIT = 5;
   const SUBJECT_SCORE_RANGE = 0.12;
   const SIGNATURE_SIDE = 12;
@@ -559,6 +561,86 @@ function mapleRecognitionWorker(onPrepared) {
         recordPosition(matches, matchFromTemplate(template, bounds, score, 'spatial', view.mirrored), options.limit);
       }
     }
+  }
+
+  function leadCanMatchFocus(template, view, screen, leadInfo, guards, focus, options) {
+    const lead = view.anchors[leadInfo.anchorIndex];
+    const stride = Math.max(1, Math.ceil(leadInfo.count / screen.leadBudget));
+    const guardError = options.jpeg ? 87 : 68;
+    const allowedMisses = Math.floor(guards.length * (options.jpeg ? 0.42 : 0.33));
+    const keys = screen.approximate ? leadInfo.anchor.keys : [leadInfo.anchor.exactKey];
+    const screenWidth = screen.width;
+    const required = Math.max(CARD_FOCUS_COVERAGE * focus.width * focus.height, CARD_POSE_COVERAGE * view.width * view.height);
+    // The exact area test below handles the corners. These bounds conservatively
+    // exclude origins whose overlap is impossible even with the other axis centered.
+    const minOverlapX = required / Math.min(view.height, focus.height);
+    const minOverlapY = required / Math.min(view.width, focus.width);
+    const xMin = Math.max(0, Math.floor(focus.x + minOverlapX - view.width));
+    const xMax = Math.min(screen.width - view.width, Math.ceil(focus.x + focus.width - minOverlapX));
+    const yMin = Math.max(0, Math.floor(focus.y + minOverlapY - view.height));
+    const yMax = Math.min(screen.height - view.height, Math.ceil(focus.y + focus.height - minOverlapY));
+    if (xMin > xMax || yMin > yMax) return false;
+    const firstTopLeft = yMin * screenWidth + xMin;
+    const lastTopLeft = yMax * screenWidth + xMax;
+    for (const key of keys) {
+      const end = screen.offsets[key + 1];
+      candidate: for (let index = screen.offsets[key]; index < end; index += stride) {
+        const position = screen.positions[index];
+        const topLeft = position - lead.offset;
+        if (topLeft < firstTopLeft || topLeft > lastTopLeft) continue;
+        if (screen.approximate && screenedError(screen, position, lead) > 38) continue;
+        const y = Math.floor(topLeft / screenWidth);
+        const x = topLeft - y * screenWidth;
+        if (x < xMin || x > xMax) continue;
+        const overlapX = Math.min(x + view.width, focus.x + focus.width) - Math.max(x, focus.x);
+        const overlapY = Math.min(y + view.height, focus.y + focus.height) - Math.max(y, focus.y);
+        if (overlapX <= 0 || overlapY <= 0 || overlapX * overlapY < required) continue;
+        let misses = 0;
+        let closeGuard = false;
+        for (let guardIndex = 0; guardIndex < guards.length; guardIndex += 1) {
+          const guard = view.anchors[guards[guardIndex]];
+          const error = screenedError(screen, topLeft + guard.offset, guard);
+          if (error > guardError) misses += 1;
+          if (error <= 38) closeGuard = true;
+          if (misses > allowedMisses || (guardIndex === 2 && !closeGuard)) continue candidate;
+        }
+        const score = verify(screen, view, template, x, y, options.jpeg);
+        if (score >= SCORE_FLOOR && (!options.rejectWeakDark || !template.darkSilhouette || score >= 0.94)) return true;
+      }
+    }
+    return false;
+  }
+
+  function hasSpatialFocusMatch(screen, options, focus) {
+    const explicitScale = Number(options.scale);
+    if (Number.isFinite(explicitScale) && (explicitScale < 0.35 || explicitScale > 4)) throw new Error('縮放倍率須介於 0.35 到 4 之間。');
+    const scales = Number.isFinite(explicitScale) ? [explicitScale]
+      : [...COMMON_SCALES, ...(screen.approximate ? JPEG_EXTRA_SCALES : EXTRA_SCALES)];
+    const matchOptions = { jpeg: screen.approximate, rejectWeakDark: options.rejectWeakDark === true };
+    const requiredFocusArea = CARD_FOCUS_COVERAGE * focus.width * focus.height;
+    for (const template of templates) {
+      if (options.entityType && options.entityType !== template.entry.type) continue;
+      if (screen.approximate && template.darkSilhouette) continue;
+      if (needsContour(template) && template.contour.length < 6) continue;
+      let leads;
+      for (const scale of scales) {
+        const width = Math.round(template.width * scale);
+        const height = Math.round(template.height * scale);
+        if (width < 5 || height < 5 || width > screen.width || height > screen.height) continue;
+        const maxOverlap = Math.min(width, focus.width) * Math.min(height, focus.height);
+        if (maxOverlap < requiredFocusArea || maxOverlap < CARD_POSE_COVERAGE * width * height) continue;
+        leads ??= candidateLeads(template, screen);
+        if (!leads.length) break;
+        const normal = transform(template, scale, false, screen.width);
+        const mirrored = transform(template, scale, true, screen.width);
+        for (const lead of leads) {
+          const guards = guardIndices(normal, lead.anchorIndex);
+          if (leadCanMatchFocus(template, normal, screen, lead, guards, focus, matchOptions)
+            || leadCanMatchFocus(template, mirrored, screen, lead, guards, focus, matchOptions)) return true;
+        }
+      }
+    }
+    return false;
   }
 
   function recognize(screen, options) {
@@ -1412,7 +1494,7 @@ function mapleRecognitionWorker(onPrepared) {
     return filledCorners >= 3 ? box : null;
   }
 
-  function coversCardFocus(pose, focus, focusCoverage = 0.55, poseCoverage = 0.45) {
+  function coversCardFocus(pose, focus, focusCoverage = CARD_FOCUS_COVERAGE, poseCoverage = CARD_POSE_COVERAGE) {
     const width = Math.min(pose.x + pose.width, focus.x + focus.width) - Math.max(pose.x, focus.x);
     const height = Math.min(pose.y + pose.height, focus.y + focus.height) - Math.max(pose.y, focus.y);
     if (width <= 0 || height <= 0) return false;
@@ -2138,9 +2220,15 @@ function mapleRecognitionWorker(onPrepared) {
     }
 
     // Native crops often match straight away, even when their background is busy.
-    const spatial = recognizeMessage({ ...message, options: {
+    const spatialOptions = {
       ...options, single: false, rejectWeakDark: true, limit: 3, includeSubjectAlternates: limit > 1,
-    } });
+    };
+    // The spatial scan is useful only if a match could cover the measured subject.
+    // Check a superset of its scales, then keep the normal ranking if a match is possible.
+    const needsSpatial = !bounded || !opaqueFocus
+      || (!options.jpeg && hasSpatialFocusMatch(indexScreen(rgba, width, height, false), spatialOptions, opaqueFocus))
+      || hasSpatialFocusMatch(indexScreen(rgba, width, height, true), spatialOptions, opaqueFocus);
+    const spatial = needsSpatial ? recognizeMessage({ ...message, options: spatialOptions }) : [];
     const spatialMatch = (opaqueFocus ? spatial.find(match => coversCardFocus(match, opaqueFocus)) : spatial[0]) ?? null;
     if ((spatialMatch?.score ?? 0) >= 0.88) {
       if (region && !subject && !opaqueFocus && !bounded) {

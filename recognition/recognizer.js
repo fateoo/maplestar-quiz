@@ -1705,6 +1705,28 @@ function mapleRecognitionWorker(onPrepared) {
     return [];
   }
 
+  function recoverBrightCard(screen, card, options, limit, focus) {
+    if (Math.min(card.width, card.height) < 160 || screen.width * screen.height > 900_000
+      || focus.width < card.width * 0.72 || focus.height < card.height * 0.70) return [];
+
+    // Retry one darker rendering only when the full outline is well defined.
+    const tone = Uint8Array.from({ length: 256 }, (_, value) => Math.round(255 * (value / 255) ** 1.6));
+    const pixels = screen.pixels.slice();
+    for (let y = card.y; y < card.y + card.height; y += 1) {
+      const left = y * screen.width + card.x;
+      for (let index = left; index < left + card.width; index += 1) {
+        const pixel = pixels[index];
+        pixels[index] = tone[pixel & 255] | (tone[(pixel >>> 8) & 255] << 8)
+          | (tone[(pixel >>> 16) & 255] << 16) | (pixel & 0xff000000);
+      }
+    }
+    const adjusted = { ...screen, pixels, lightValues: undefined };
+    const matches = recognizeCard(adjusted, card, options, limit)
+      .filter(match => coversCardFocus(match, focus, 0.78, 0.72));
+    const [best, rival] = matches;
+    return best?.score >= 0.865 && (!rival || best.score - rival.score >= 0.035) ? matches : [];
+  }
+
   function recoverCardMatch(source, card, options, limit, previous, subjectFocus) {
     const previousScore = previous[0]?.score ?? 0;
     if (!card) return [];
@@ -1734,6 +1756,14 @@ function mapleRecognitionWorker(onPrepared) {
       if (best?.score >= minimum && coversCardFocus(best, candidate, 0.70, 0.65)
         && (!rival || best.score - rival.score >= 0.035)) {
         return best.score >= 0.92 ? matches : matches.map(match => ({ ...match, suggestion: true }));
+      }
+    }
+
+    if (options.retrySampling !== false && (!preceding || smallPatch)) {
+      const brightFocus = darkFocus ?? (tightCard ? cardFocusBounds(screen, card) : null);
+      if (brightFocus && (!preceding || !coversCardFocus(preceding, brightFocus))) {
+        const adjusted = recoverBrightCard(screen, card, options, limit, brightFocus);
+        if (adjusted.length) return adjusted;
       }
     }
 

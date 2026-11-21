@@ -13,7 +13,7 @@
   const preferredCandidateScore = 0.8;
   const spatialCandidateScore = 0.76;
   const raceDelay = 100;
-  const spareBudget = 6000;
+  const recognitionTimeout = 5000;
   const trustedScore = 0.90;
   const trustedMargin = 0.025;
   const formatNumber = new Intl.NumberFormat('zh-TW');
@@ -47,7 +47,6 @@
   let requestId = 0;
   let workerRequestId = 0;
   let activeJob;
-  let pendingRecognition = false;
   let screenshotLoaded = false;
   let proposedRegions = [];
   // An undefined selection awaits a choice. Null means use the whole image.
@@ -184,7 +183,7 @@
       slot.ready = true;
       if (slot === worker) {
         setEngineState('ready', '本機圖鑑已就緒');
-        if (pendingRecognition) recognize();
+        if (activeJob) startPrimary(activeJob);
       } else if (activeJob?.alternate?.slot === slot) {
         sendLane(activeJob.alternate);
       }
@@ -200,7 +199,7 @@
     if (!lane || data.requestId !== lane.requestId) return;
     slot.lane = undefined;
     if (lane.job === activeJob) finishLane(lane, data);
-    else if (slot === worker && pendingRecognition) recognize();
+    else if (slot === worker && activeJob) startPrimary(activeJob);
   }
 
   function handleWorkerFault(slot) {
@@ -211,18 +210,45 @@
       finishLane(lane, { type: 'error' });
     } else if (slot === worker) {
       if (slot.ready) restartWarmWorker();
-      else setEngineState('error', '辨識引擎載入失敗', '請確認圖鑑檔案完整，再用新版瀏覽器開啟網頁。');
+      else {
+        if (activeJob) {
+          if (!canRunJob(activeJob)) return;
+          releaseJob(activeJob);
+        }
+        setEngineState('error', '辨識引擎載入失敗', '請確認圖鑑檔案完整，再用新版瀏覽器開啟網頁。');
+      }
     }
+  }
+
+  function releaseJob(job) {
+    clearTimeout(job.deadline);
+    clearTimeout(job.raceTimer);
+    activeJob = undefined;
+  }
+
+  function discardJob(job, stopLoading = false) {
+    releaseJob(job);
+    retireAlternate(job.alternate);
+    if (worker.lane?.job === job || (stopLoading && !worker.ready)) retireWorker(worker);
+    if (worker.closed) setEngineState('pending', '等待重新辨識');
+  }
+
+  function timeOutJob(job) {
+    if (job !== activeJob) return;
+    discardJob(job, true);
+    showNotice('error', '辨識逾時', '圖片辨識已超過 5 秒。請重新辨識，或裁切圖片後再試。', true);
+  }
+
+  function canRunJob(job) {
+    if (job !== activeJob) return false;
+    if (performance.now() - job.startedAt < recognitionTimeout) return true;
+    timeOutJob(job);
+    return false;
   }
 
   function invalidateRecognition() {
     requestId += 1;
-    pendingRecognition = false;
-    if (!activeJob) return;
-    clearTimeout(activeJob.timer);
-    retireAlternate(activeJob.alternate);
-    activeJob = undefined;
-    if (worker?.closed) restartWarmWorker();
+    if (activeJob) discardJob(activeJob);
   }
 
   function showNotice(state, title, detail, canRetry = false) {
@@ -557,24 +583,14 @@
   function recognize() {
     if (!screenshotLoaded || selectedRegion === undefined || draftRegion) return;
     if (activeJob) return;
+    const startedAt = performance.now();
+    if (worker?.closed && workerState !== 'error') restartWarmWorker();
     if (workerState === 'error') {
       showNotice('error', '無法辨識圖片', workerIssue);
       return;
     }
-    if (workerState === 'pending') {
-      pendingRecognition = true;
-      showNotice('busy', '正在載入圖鑑', '圖鑑就緒後會自動辨識這張圖片。');
-      return;
-    }
-    if (worker.lane) {
-      pendingRecognition = true;
-      showNotice('busy', '等待辨識', '上一輪比對完成後會辨識這張圖片。');
-      return;
-    }
 
-    pendingRecognition = false;
-    showNotice('busy', '正在辨識', '正在比對本機圖鑑中的怪物與 NPC。');
-    const job = { startedAt: performance.now(), tentative: tentativeRegion };
+    const job = { startedAt, tentative: tentativeRegion };
     let primaryRegion = selectedRegion;
     if (tentativeRegion) {
       const image = wholeImage();
@@ -583,14 +599,31 @@
     }
     job.primary = { job, slot: worker, region: primaryRegion };
     activeJob = job;
+    const remaining = Math.max(0, recognitionTimeout - (performance.now() - startedAt));
+    job.deadline = setTimeout(() => timeOutJob(job), remaining);
+    startPrimary(job);
+  }
+
+  function startPrimary(job) {
+    if (!canRunJob(job) || job.primary.started) return;
+    if (!job.primary.slot.ready) {
+      showNotice('busy', '正在載入圖鑑', '圖鑑就緒後會自動辨識這張圖片。');
+      return;
+    }
+    if (job.primary.slot.lane) {
+      showNotice('busy', '等待辨識', '上一輪比對完成後會辨識這張圖片。');
+      return;
+    }
+
+    showNotice('busy', '正在辨識', '正在比對本機圖鑑中的怪物與 NPC。');
     sendLane(job.primary);
     if (job === activeJob && job.tentative && !job.primary.response) {
-      job.timer = setTimeout(() => startAlternate(job), raceDelay);
+      job.raceTimer = setTimeout(() => startAlternate(job), raceDelay);
     }
   }
 
   function sendLane(lane) {
-    if (lane.job !== activeJob || !lane.slot.ready || lane.slot.closed) return;
+    if (!canRunJob(lane.job) || !lane.slot.ready || lane.slot.closed) return;
     lane.started = true;
     const region = lane.region ?? wholeImage();
     let pixels;
@@ -600,6 +633,7 @@
       finishLane(lane, { type: 'error', unreadableImage: true });
       return;
     }
+    if (!canRunJob(lane.job)) return;
     const { rgba, width, height, scale } = pixels;
     if (lane.job.tentative) {
       const subject = lane.job.tentative;
@@ -620,11 +654,11 @@
   }
 
   function startAlternate(job) {
-    if (job !== activeJob) return false;
+    if (!canRunJob(job)) return false;
     const primary = job.primary.slot;
     const warm = job.primary.response && primary.ready && !primary.closed && !primary.lane;
     if (job.alternate && (job.alternate.started || !warm)) return false;
-    clearTimeout(job.timer);
+    clearTimeout(job.raceTimer);
     retireAlternate(job.alternate);
     const lane = { job, region: job.primary.region ? null : job.tentative };
     job.alternate = lane;
@@ -635,9 +669,6 @@
     } else {
       try {
         lane.slot = createWorkerSlot();
-        lane.deadline = setTimeout(() => {
-          if (job === activeJob && job.alternate === lane && !lane.response) handleWorkerFault(lane.slot);
-        }, spareBudget);
       } catch {
         finishLane(lane, { type: 'error' });
       }
@@ -647,7 +678,6 @@
 
   function retireAlternate(lane) {
     if (!lane) return;
-    clearTimeout(lane.deadline);
     if (lane.slot !== worker) retireWorker(lane.slot);
   }
 
@@ -679,8 +709,7 @@
 
   function finishLane(lane, response) {
     const { job } = lane;
-    if (job !== activeJob) return;
-    clearTimeout(lane.deadline);
+    if (!canRunJob(job)) return;
     lane.response = response;
     if (!job.tentative) {
       finishJob(job, lane);
@@ -691,7 +720,7 @@
       finishJob(job, lane);
       return;
     }
-    if (startAlternate(job) || !job.primary.response || !job.alternate.response) return;
+    if (startAlternate(job) || job !== activeJob || !job.primary.response || !job.alternate.response) return;
 
     const primary = job.primary.grade;
     const alternate = job.alternate.grade;
@@ -707,9 +736,7 @@
   }
 
   function finishJob(job, winner, matches = winner.response.matches) {
-    clearTimeout(job.timer);
-    activeJob = undefined;
-    clearTimeout(job.alternate?.deadline);
+    releaseJob(job);
     const alternateSlot = job.alternate?.slot;
     const spare = alternateSlot === worker ? undefined : alternateSlot;
     if (spare?.ready && !spare.closed && (worker.closed || (winner.slot === spare && winner.grade?.trusted))) {

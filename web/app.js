@@ -343,7 +343,7 @@
 
     screenshotLoaded = true;
     const { naturalWidth, naturalHeight } = screenshot;
-    const previewScale = Math.max(1, Math.min(4, 420 / Math.max(naturalWidth, naturalHeight)));
+    const previewScale = captured ? 1 : Math.max(1, Math.min(4, 420 / Math.max(naturalWidth, naturalHeight)));
     screenshot.style.setProperty('--preview-width', `${Math.round(naturalWidth * previewScale)}px`);
     screenshot.style.setProperty('--preview-ratio', naturalWidth / naturalHeight);
     preview.hidden = false;

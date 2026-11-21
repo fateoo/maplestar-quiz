@@ -78,7 +78,9 @@ p, h1, h2 { margin: 0; }
   border-radius: .85rem;
   background: #eef3ea;
 }
-.usage-guide h2 { font-size: .8rem; font-weight: 700; color: var(--muted); }
+.usage-guide summary { cursor: pointer; font-size: .9rem; font-weight: 700; }
+.usage-guide summary:focus-visible { outline: 2px solid #a84923; outline-offset: 3px; border-radius: .2rem; }
+.usage-choice { margin-top: .55rem; color: var(--muted); font-size: .85rem; line-height: 1.55; }
 .usage-methods { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 24rem), 1fr)); gap: .75rem 1.35rem; margin-top: .45rem; }
 .usage-methods h3 { margin: 0 0 .2rem; font-size: .93rem; font-weight: 720; }
 .usage-methods p { color: var(--muted); font-size: .85rem; line-height: 1.55; }
